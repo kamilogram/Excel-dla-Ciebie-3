@@ -1,0 +1,6 @@
+{
+  "name": "Excel Pro 365 & Akademia Excela",
+  "description": "Biuro-klasy arkusz kalkulacyjny w stylu Microsoft Office 365 z interaktywnymi zadaniami, walidacją w czasie rzeczywistym, ligami rywalizacji, odznakami i trybem offline.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
