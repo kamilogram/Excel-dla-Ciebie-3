@@ -35,7 +35,7 @@ export const EXCEL_LESSONS: LearningTask[] = [
     ],
     targetSheetId: 'akademia-sheet',
     targetCell: 'C9',
-    expectedFormulaKeywords: ['ŚREDNIA', 'AVERAGE'],
+    expectedFormulaKeywords: ['ŚREDNIA', 'SREDNIA', 'AVERAGE'],
     expectedResultCheck: (val) => Math.round(Number(val)) === 4320,
     hint: 'Formuła to: =ŚREDNIA(C3:C7)',
     solutionFormula: '=ŚREDNIA(C3:C7)',

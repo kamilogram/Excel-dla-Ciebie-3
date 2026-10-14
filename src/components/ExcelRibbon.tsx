@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Bold,
   Italic,
@@ -31,6 +31,10 @@ import {
   Timer,
   Lightbulb,
   RotateCcw,
+  Paintbrush,
+  Copy,
+  Scissors,
+  ClipboardPaste,
 } from 'lucide-react';
 import { CellStyle } from '../types/excel';
 
@@ -62,6 +66,12 @@ interface ExcelRibbonProps {
   zoomLevel: number;
   onSetZoom: (zoom: number) => void;
   isDarkMode: boolean;
+  isFormatPainterActive?: boolean;
+  isFormatPainterLocked?: boolean;
+  onToggleFormatPainter?: (lock?: boolean) => void;
+  onCopy?: () => void;
+  onCut?: () => void;
+  onPaste?: () => void;
 }
 
 export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
@@ -90,19 +100,43 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
   zoomLevel,
   onSetZoom,
   isDarkMode,
+  isFormatPainterActive = false,
+  isFormatPainterLocked = false,
+  onToggleFormatPainter,
+  onCopy,
+  onCut,
+  onPaste,
 }) => {
   const [showAutoSumMenu, setShowAutoSumMenu] = useState(false);
   const [showBorderMenu, setShowBorderMenu] = useState(false);
   const [showFillColorPicker, setShowFillColorPicker] = useState(false);
   const [showTextColorPicker, setShowTextColorPicker] = useState(false);
 
-  const colors = [
-    '#ffffff', '#000000', '#107c41', '#0f6cbd', '#d83b01', '#881798',
-    '#fef3c7', '#f0fdf4', '#eff6ff', '#fef2f2', '#f3f4f6', '#d1d5db',
+  const [selectedFillColor, setSelectedFillColor] = useState<string>('#fef3c7');
+  const [selectedTextColor, setSelectedTextColor] = useState<string>('#dc2626');
+
+  // Close all open dropdowns on outside click
+  useEffect(() => {
+    const handleGlobalClick = () => {
+      setShowAutoSumMenu(false);
+      setShowBorderMenu(false);
+      setShowFillColorPicker(false);
+      setShowTextColorPicker(false);
+    };
+    window.addEventListener('click', handleGlobalClick);
+    return () => window.removeEventListener('click', handleGlobalClick);
+  }, []);
+
+  const THEME_COLORS = [
+    '#000000', '#ffffff', '#e5e7eb', '#9ca3af', '#4b5563', '#1f2937',
+    '#ef4444', '#dc2626', '#b91c1c', '#f97316', '#ea580c', '#d97706',
+    '#eab308', '#ca8a04', '#84cc16', '#65a30d', '#22c55e', '#16a34a',
+    '#107c41', '#059669', '#06b6d4', '#0284c7', '#0f6cbd', '#2563eb',
+    '#4f46e5', '#7c3aed', '#9333ea', '#c026d3', '#db2777', '#e11d48',
   ];
 
   return (
-    <div className={`flex flex-col border-b select-none transition-colors ${
+    <div className={`flex flex-col border-b select-none transition-colors relative z-30 ${
       isDarkMode ? 'bg-[#202020] border-[#333333] text-neutral-200' : 'bg-[#f3f4f6] border-[#e5e7eb] text-neutral-800'
     }`}>
       {/* Ribbon Navigation Tabs */}
@@ -138,15 +172,75 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
       </div>
 
       {/* Ribbon Toolbar Content Area */}
-      <div className={`p-1.5 min-h-[58px] flex items-center overflow-x-auto gap-3 text-xs scrollbar-none ${
+      <div className={`p-1.5 min-h-[58px] flex items-center gap-3 text-xs overflow-visible ${
         isDarkMode ? 'bg-[#2b2b2b]' : 'bg-white'
       }`}>
         {/* --- TAB 1: NARZĘDZIA GŁÓWNE (HOME) --- */}
         {activeTab === 'home' && (
           <div className="flex items-center gap-3">
-            {/* Font Style Group */}
-            <div className="flex items-center gap-1 pr-3 border-r border-neutral-300 dark:border-neutral-700">
+            {/* Clipboard (Schowek) & Format Painter Group */}
+            <div className="flex items-center gap-1.5 pr-3 border-r border-neutral-300 dark:border-neutral-700">
+              {/* Paste button */}
               <button
+                type="button"
+                onClick={onPaste}
+                title="Wklej zawartość (Ctrl+V)"
+                className="flex flex-col items-center justify-center px-2 py-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-200 transition-colors cursor-pointer group"
+              >
+                <ClipboardPaste size={16} className="text-[#107c41]" />
+                <span className="text-[10px] mt-0.5 font-medium leading-none">Wklej</span>
+              </button>
+
+              <div className="flex flex-col gap-0.5">
+                <div className="flex items-center gap-0.5">
+                  <button
+                    type="button"
+                    onClick={onCut}
+                    title="Wytnij (Ctrl+X)"
+                    className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-200 transition-colors cursor-pointer"
+                  >
+                    <Scissors size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={onCopy}
+                    title="Kopiuj (Ctrl+C)"
+                    className="p-1 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-200 transition-colors cursor-pointer"
+                  >
+                    <Copy size={12} />
+                  </button>
+                </div>
+
+                {/* Malarz formatów (Format Painter) */}
+                <button
+                  type="button"
+                  onClick={() => onToggleFormatPainter?.(false)}
+                  onDoubleClick={() => onToggleFormatPainter?.(true)}
+                  title="Malarz formatów (Kopiuje formatowanie z zaznaczonej komórki. Kliknij dwukrotnie, aby zastosować wielokrotnie)"
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded transition-all cursor-pointer select-none ${
+                    isFormatPainterActive
+                      ? 'bg-[#107c41] text-white font-semibold shadow-xs ring-2 ring-emerald-500 ring-offset-1'
+                      : 'hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-200'
+                  }`}
+                >
+                  <Paintbrush
+                    size={12}
+                    className={isFormatPainterActive ? 'text-amber-300 animate-pulse' : 'text-amber-600 dark:text-amber-400'}
+                  />
+                  <span className="text-[11px] leading-tight">Malarz formatów</span>
+                  {isFormatPainterLocked && (
+                    <span className="text-[9px] bg-black/30 text-amber-200 px-1 py-0.2 rounded font-bold ml-0.5">
+                      PIN
+                    </span>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* Font Style Group */}
+            <div className="flex items-center gap-1.5 pr-3 border-r border-neutral-300 dark:border-neutral-700">
+              <button
+                type="button"
                 onClick={() => onApplyStyle({ bold: !currentStyle.bold })}
                 title="Pogrubienie (Ctrl+B)"
                 className={`p-1.5 rounded transition-colors ${
@@ -156,6 +250,7 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
                 <Bold size={14} />
               </button>
               <button
+                type="button"
                 onClick={() => onApplyStyle({ italic: !currentStyle.italic })}
                 title="Kursywa (Ctrl+I)"
                 className={`p-1.5 rounded transition-colors ${
@@ -165,6 +260,7 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
                 <Italic size={14} />
               </button>
               <button
+                type="button"
                 onClick={() => onApplyStyle({ underline: !currentStyle.underline })}
                 title="Podkreślenie (Ctrl+U)"
                 className={`p-1.5 rounded transition-colors ${
@@ -174,65 +270,145 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
                 <Underline size={14} />
               </button>
 
-              {/* Fill Color Picker */}
-              <div className="relative">
+              <div className="h-4 w-px bg-neutral-200 dark:bg-neutral-700 mx-0.5" />
+
+              {/* Fill Color Picker (Split Button) */}
+              <div className="relative flex items-center rounded border border-transparent hover:border-neutral-300 dark:hover:border-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-700">
                 <button
-                  onClick={() => setShowFillColorPicker(!showFillColorPicker)}
-                  title="Kolor wypełnienia komórki"
-                  className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-0.5"
+                  type="button"
+                  onClick={() => onApplyStyle({ bgColor: currentStyle.bgColor || selectedFillColor || '#fef3c7' })}
+                  title={`Zastosuj kolor wypełnienia (${selectedFillColor || '#fef3c7'})`}
+                  className="p-1 rounded-l flex flex-col items-center justify-center min-w-[24px]"
                 >
-                  <PaintBucket size={14} style={{ color: currentStyle.bgColor || '#107c41' }} />
+                  <PaintBucket size={13} className="text-neutral-700 dark:text-neutral-200" />
+                  <span
+                    className="w-3.5 h-[3px] rounded-xs mt-0.5"
+                    style={{ backgroundColor: currentStyle.bgColor || selectedFillColor || '#fef3c7' }}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowFillColorPicker(!showFillColorPicker);
+                    setShowTextColorPicker(false);
+                    setShowBorderMenu(false);
+                    setShowAutoSumMenu(false);
+                  }}
+                  title="Wybierz kolor wypełnienia"
+                  className="px-0.5 py-2 rounded-r hover:bg-neutral-200 dark:hover:bg-neutral-600 cursor-pointer"
+                >
                   <ChevronDown size={10} />
                 </button>
+
                 {showFillColorPicker && (
-                  <div className="absolute top-8 left-0 z-50 p-2 bg-white dark:bg-[#333333] shadow-lg rounded border border-neutral-200 dark:border-neutral-700 grid grid-cols-6 gap-1 w-36">
-                    {colors.map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => {
-                          onApplyStyle({ bgColor: c });
-                          setShowFillColorPicker(false);
-                        }}
-                        style={{ backgroundColor: c }}
-                        className="w-5 h-5 rounded border border-neutral-300 dark:border-neutral-600 hover:scale-110 transition-transform"
-                      />
-                    ))}
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-9 left-0 z-50 p-2.5 bg-white dark:bg-[#2b2b2b] shadow-2xl rounded-md border border-neutral-300 dark:border-neutral-700 w-48 animate-in fade-in zoom-in-95 duration-100"
+                  >
+                    <div className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5">
+                      Kolor wypełnienia
+                    </div>
                     <button
+                      type="button"
                       onClick={() => {
                         onApplyStyle({ bgColor: undefined });
                         setShowFillColorPicker(false);
                       }}
-                      className="col-span-6 text-[10px] text-center py-1 mt-1 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                      className="w-full flex items-center gap-2 px-1.5 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded mb-2 border border-neutral-200 dark:border-neutral-700 cursor-pointer"
                     >
-                      Brak wypełnienia
+                      <span className="w-4 h-4 rounded-xs border border-dashed border-neutral-400 flex items-center justify-center text-[9px] text-neutral-500">✕</span>
+                      <span>Brak wypełnienia</span>
                     </button>
+
+                    <div className="text-[10px] uppercase font-semibold text-neutral-400 mb-1">Paleta kolorów</div>
+                    <div className="grid grid-cols-6 gap-1">
+                      {THEME_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => {
+                            onApplyStyle({ bgColor: c });
+                            setSelectedFillColor(c);
+                            setShowFillColorPicker(false);
+                          }}
+                          style={{ backgroundColor: c }}
+                          title={c}
+                          className="w-5 h-5 rounded-xs border border-neutral-300 dark:border-neutral-600 hover:scale-125 transition-transform cursor-pointer"
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Text Color Picker */}
-              <div className="relative">
+              {/* Font Color Picker (Dedicated Split Button with 'A' underline) */}
+              <div className="relative flex items-center rounded border border-transparent hover:border-neutral-300 dark:hover:border-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-700">
                 <button
-                  onClick={() => setShowTextColorPicker(!showTextColorPicker)}
-                  title="Kolor czcionki"
-                  className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-0.5"
+                  type="button"
+                  onClick={() => onApplyStyle({ textColor: currentStyle.textColor || selectedTextColor || '#dc2626' })}
+                  title={`Zastosuj kolor czcionki (${selectedTextColor || 'Czerwony'})`}
+                  className="p-1 rounded-l flex flex-col items-center justify-center min-w-[24px]"
                 >
-                  <Type size={14} style={{ color: currentStyle.textColor || '#107c41' }} />
+                  <span className="font-bold font-serif text-[13px] leading-none text-neutral-900 dark:text-white">A</span>
+                  <span
+                    className="w-3.5 h-[3px] rounded-xs mt-0.5"
+                    style={{ backgroundColor: currentStyle.textColor || selectedTextColor || '#dc2626' }}
+                  />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowTextColorPicker(!showTextColorPicker);
+                    setShowFillColorPicker(false);
+                    setShowBorderMenu(false);
+                    setShowAutoSumMenu(false);
+                  }}
+                  title="Wybierz kolor czcionki"
+                  className="px-0.5 py-2 rounded-r hover:bg-neutral-200 dark:hover:bg-neutral-600 cursor-pointer"
+                >
                   <ChevronDown size={10} />
                 </button>
+
                 {showTextColorPicker && (
-                  <div className="absolute top-8 left-0 z-50 p-2 bg-white dark:bg-[#333333] shadow-lg rounded border border-neutral-200 dark:border-neutral-700 grid grid-cols-6 gap-1 w-36">
-                    {colors.map((c) => (
-                      <button
-                        key={c}
-                        onClick={() => {
-                          onApplyStyle({ textColor: c });
-                          setShowTextColorPicker(false);
-                        }}
-                        style={{ backgroundColor: c }}
-                        className="w-5 h-5 rounded border border-neutral-300 dark:border-neutral-600 hover:scale-110 transition-transform"
-                      />
-                    ))}
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-9 left-0 z-50 p-2.5 bg-white dark:bg-[#2b2b2b] shadow-2xl rounded-md border border-neutral-300 dark:border-neutral-700 w-48 animate-in fade-in zoom-in-95 duration-100"
+                  >
+                    <div className="text-[11px] font-semibold text-neutral-500 dark:text-neutral-400 mb-1.5">
+                      Kolor czcionki
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onApplyStyle({ textColor: undefined });
+                        setSelectedTextColor('#000000');
+                        setShowTextColorPicker(false);
+                      }}
+                      className="w-full flex items-center gap-2 px-1.5 py-1 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded mb-2 border border-neutral-200 dark:border-neutral-700 cursor-pointer"
+                    >
+                      <span className="w-4 h-4 rounded-xs border border-neutral-300 bg-neutral-900 dark:bg-white" />
+                      <span>Automatyczny (Domyślny)</span>
+                    </button>
+
+                    <div className="text-[10px] uppercase font-semibold text-neutral-400 mb-1">Paleta kolorów</div>
+                    <div className="grid grid-cols-6 gap-1">
+                      {THEME_COLORS.map((c) => (
+                        <button
+                          key={c}
+                          type="button"
+                          onClick={() => {
+                            onApplyStyle({ textColor: c });
+                            setSelectedTextColor(c);
+                            setShowTextColorPicker(false);
+                          }}
+                          style={{ backgroundColor: c }}
+                          title={c}
+                          className="w-5 h-5 rounded-xs border border-neutral-300 dark:border-neutral-600 hover:scale-125 transition-transform cursor-pointer"
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -240,36 +416,50 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
               {/* Borders dropdown */}
               <div className="relative">
                 <button
-                  onClick={() => setShowBorderMenu(!showBorderMenu)}
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowBorderMenu(!showBorderMenu);
+                    setShowFillColorPicker(false);
+                    setShowTextColorPicker(false);
+                    setShowAutoSumMenu(false);
+                  }}
                   title="Krawędzie komórki"
-                  className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-0.5"
+                  className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-0.5 border border-transparent hover:border-neutral-300 dark:hover:border-neutral-600 cursor-pointer"
                 >
                   <Table size={14} />
                   <ChevronDown size={10} />
                 </button>
                 {showBorderMenu && (
-                  <div className="absolute top-8 left-0 z-50 p-1.5 bg-white dark:bg-[#333333] shadow-lg rounded border border-neutral-200 dark:border-neutral-700 flex flex-col gap-1 w-44 text-[11px]">
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-9 left-0 z-50 p-1.5 bg-white dark:bg-[#2b2b2b] shadow-2xl rounded-md border border-neutral-300 dark:border-neutral-700 flex flex-col gap-1 w-48 text-xs animate-in fade-in zoom-in-95 duration-100"
+                  >
                     <button
+                      type="button"
                       onClick={() => { onApplyStyle({ border: 'all' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded cursor-pointer"
                     >
                       Wszystkie krawędzie
                     </button>
                     <button
+                      type="button"
                       onClick={() => { onApplyStyle({ border: 'outside' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded cursor-pointer"
                     >
                       Krawędzie zewnętrzne
                     </button>
                     <button
+                      type="button"
                       onClick={() => { onApplyStyle({ border: 'thick-bottom' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded cursor-pointer"
                     >
                       Gruba dolna krawędź sumy
                     </button>
                     <button
+                      type="button"
                       onClick={() => { onApplyStyle({ border: 'none' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"
+                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded text-neutral-500 cursor-pointer"
                     >
                       Brak krawędzi
                     </button>
@@ -347,14 +537,24 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
                     <span>Autosumowanie</span>
                   </button>
                   <button
-                    onClick={() => setShowAutoSumMenu(!showAutoSumMenu)}
-                    className="px-1 py-1 border-l border-neutral-300 dark:border-neutral-600"
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowAutoSumMenu(!showAutoSumMenu);
+                      setShowFillColorPicker(false);
+                      setShowTextColorPicker(false);
+                      setShowBorderMenu(false);
+                    }}
+                    className="px-1 py-1 border-l border-neutral-300 dark:border-neutral-600 hover:bg-neutral-200 dark:hover:bg-neutral-600 cursor-pointer"
                   >
                     <ChevronDown size={11} />
                   </button>
                 </div>
                 {showAutoSumMenu && (
-                  <div className="absolute top-8 left-0 z-50 p-1 bg-white dark:bg-[#333333] shadow-lg rounded border border-neutral-200 dark:border-neutral-700 flex flex-col gap-0.5 w-36 text-[11px]">
+                  <div
+                    onClick={(e) => e.stopPropagation()}
+                    className="absolute top-9 left-0 z-50 p-1.5 bg-white dark:bg-[#2b2b2b] shadow-2xl rounded-md border border-neutral-300 dark:border-neutral-700 flex flex-col gap-0.5 w-36 text-xs animate-in fade-in zoom-in-95 duration-100"
+                  >
                     <button
                       onClick={() => { onAutoSum('SUMA'); setShowAutoSumMenu(false); }}
                       className="px-2 py-1 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded"

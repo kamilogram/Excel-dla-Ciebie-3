@@ -55,6 +55,37 @@ export function getRangeCells(rangeStr: string): string[] {
 }
 
 /**
+ * Inserts or replaces a cell or range reference in a formula when pointing to cells in Excel.
+ */
+export function insertOrReplaceCellRef(
+  currentFormula: string,
+  newRef: string,
+  hasActiveRef: boolean
+): string {
+  if (!currentFormula.startsWith('=')) {
+    return `=${newRef}`;
+  }
+
+  if (currentFormula === '=') {
+    return `=${newRef}`;
+  }
+
+  const lastChar = currentFormula.trimEnd().slice(-1);
+  const operatorChars = ['=', '(', '+', '-', '*', '/', ',', ';', ':', '>', '<', '&'];
+
+  if (operatorChars.includes(lastChar) || !hasActiveRef) {
+    return currentFormula + newRef;
+  }
+
+  const trailingRefRegex = /([$]?[A-Z]+[$]?[0-9]+(?::[$]?[A-Z]+[$]?[0-9]+)?)$/i;
+  if (trailingRefRegex.test(currentFormula)) {
+    return currentFormula.replace(trailingRefRegex, newRef);
+  }
+
+  return currentFormula + newRef;
+}
+
+/**
  * Clean numeric string from Polish comma decimals (e.g. "12,50" -> 12.50)
  */
 export function parseNumericValue(val: any): number {
@@ -199,22 +230,21 @@ function evaluateFunctions(
   // We match innermost functions or process token by token
   let current = expr;
 
-  // Replace Polish names with standard tokens for easier processing
+  // Replace Polish and English function names (both with and without Polish diacritics)
   current = current
-    .replace(/\bSUMA\b/gi, 'SUM')
-    .replace(/\bŚREDNIA\b/gi, 'AVERAGE')
-    .replace(/\bILE\.LICZB\b/gi, 'COUNT')
-    .replace(/\bJEŻELI\b/gi, 'IF')
-    .replace(/\bWYSZUKAJ\.PIONOWO\b/gi, 'VLOOKUP')
-    .replace(/\bLICZ\.JEŻELI\b/gi, 'COUNTIF')
-    .replace(/\bSUMA\.JEŻELI\b/gi, 'SUMIF')
-    .replace(/\bZŁĄCZ\.TEKSTY\b/gi, 'CONCAT')
-    .replace(/\bCONCATENATE\b/gi, 'CONCAT')
-    .replace(/\bZAOKR\b/gi, 'ROUND')
-    .replace(/\bLITERY\.WIELKIE\b/gi, 'UPPER')
-    .replace(/\bLITERY\.MAŁE\b/gi, 'LOWER')
-    .replace(/\bDŁ\b/gi, 'LEN')
-    .replace(/\bDZIŚ\(\)/gi, 'TODAY()');
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:ŚREDNIA|SREDNIA)(?=\s*\()/giu, 'AVERAGE')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:SUMA|SUM)(?=\s*\()/giu, 'SUM')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:ILE\.LICZB|ILE_LICZB|COUNT)(?=\s*\()/giu, 'COUNT')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:JEŻELI|JEZELI|IF)(?=\s*\()/giu, 'IF')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:WYSZUKAJ\.PIONOWO|WYSZUKAJ_PIONOWO|VLOOKUP)(?=\s*\()/giu, 'VLOOKUP')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:LICZ\.JEŻELI|LICZ\.JEZELI|COUNTIF)(?=\s*\()/giu, 'COUNTIF')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:SUMA\.JEŻELI|SUMA\.JEZELI|SUMIF)(?=\s*\()/giu, 'SUMIF')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:ZŁĄCZ\.TEKSTY|ZLACZ\.TEKSTY|CONCATENATE|CONCAT)(?=\s*\()/giu, 'CONCAT')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:ZAOKR|ROUND)(?=\s*\()/giu, 'ROUND')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:LITERY\.WIELKIE|LITERY_WIELKIE|UPPER)(?=\s*\()/giu, 'UPPER')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:LITERY\.MAŁE|LITERY\.MALE|LITERY_MALE|LOWER)(?=\s*\()/giu, 'LOWER')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:DŁ|DL|LEN)(?=\s*\()/giu, 'LEN')
+    .replace(/(?:^|(?<=[^a-zA-Z0-9_\p{L}.]))(?:DZIŚ|DZIS|TODAY)(?=\s*\()/giu, 'TODAY');
 
   let loopLimit = 30;
   const fnRegex = /\b(SUM|AVERAGE|COUNT|MIN|MAX|IF|VLOOKUP|COUNTIF|SUMIF|CONCAT|ROUND|UPPER|LOWER|LEN|TODAY)\s*\(([^()]*)\)/i;
@@ -248,15 +278,24 @@ function evaluateFunctions(
             if (arg.includes(':')) {
               const cells = getRangeCells(arg);
               for (const c of cells) {
-                sum += parseNumericValue(getCellValue(c));
-                count++;
+                const cellObj = sheet.cells[c];
+                // In Excel, blank cells in a range are NOT counted towards the average
+                if (!cellObj || cellObj.raw === '' || cellObj.raw === undefined) continue;
+                const val = getCellValue(c);
+                const num = parseNumericValue(val);
+                if (typeof val === 'number' || (typeof val === 'string' && val.trim() !== '' && !isNaN(Number(val.replace(',', '.'))))) {
+                  sum += num;
+                  count++;
+                }
               }
             } else {
-              sum += parseNumericValue(evaluateSimpleArg(arg, getCellValue));
+              const val = evaluateSimpleArg(arg, getCellValue);
+              const num = parseNumericValue(val);
+              sum += num;
               count++;
             }
           }
-          return count > 0 ? String(sum / count) : '0';
+          return count > 0 ? String(sum / count) : '#DZIEL/0!';
         }
 
         case 'COUNT': {
@@ -284,6 +323,8 @@ function evaluateFunctions(
             if (arg.includes(':')) {
               const cells = getRangeCells(arg);
               for (const c of cells) {
+                const cellObj = sheet.cells[c];
+                if (!cellObj || cellObj.raw === '' || cellObj.raw === undefined) continue;
                 min = Math.min(min, parseNumericValue(getCellValue(c)));
               }
             } else {
@@ -299,6 +340,8 @@ function evaluateFunctions(
             if (arg.includes(':')) {
               const cells = getRangeCells(arg);
               for (const c of cells) {
+                const cellObj = sheet.cells[c];
+                if (!cellObj || cellObj.raw === '' || cellObj.raw === undefined) continue;
                 max = Math.max(max, parseNumericValue(getCellValue(c)));
               }
             } else {

@@ -77,3 +77,21 @@
 .pulse-target {
   animation: pulseGlow 2s infinite ease-in-out;
 }
+
+/* Excel formula point mode - Marching ants animated dashed border */
+@keyframes marchingAntsDash {
+  0% {
+    stroke-dashoffset: 0;
+  }
+  100% {
+    stroke-dashoffset: 16;
+  }
+}
+
+.excel-marching-ants {
+  border: 2px dashed #0f6cbd !important;
+  background-color: rgba(15, 108, 189, 0.12) !important;
+  box-shadow: 0 0 0 1px rgba(15, 108, 189, 0.3);
+  position: relative;
+  z-index: 15;
+}

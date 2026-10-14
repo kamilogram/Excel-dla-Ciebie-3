@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import {
   SheetData,
@@ -22,6 +22,7 @@ import {
   parseCellAddress,
   evaluateFormula,
   getRangeCells,
+  insertOrReplaceCellRef,
 } from './utils/formulaEngine';
 import { sounds } from './utils/audio';
 import { ExcelHeader } from './components/ExcelHeader';
@@ -83,6 +84,9 @@ export default function App() {
   const [activeCellId, setActiveCellId] = useState<string>('C8');
   const [selectionRange, setSelectionRange] = useState<SelectionRange | null>(null);
   const [formulaBarValue, setFormulaBarValue] = useState<string>('');
+  const [isFormulaMode, setIsFormulaMode] = useState<boolean>(false);
+  const [formulaPointedRange, setFormulaPointedRange] = useState<SelectionRange | null>(null);
+  const [hasActiveFormulaRef, setHasActiveFormulaRef] = useState<boolean>(false);
   const [isLearningPanelOpen, setIsLearningPanelOpen] = useState<boolean>(true);
   const [currentTaskId, setCurrentTaskId] = useState<string>('lesson-1');
   const [showGridlines, setShowGridlines] = useState<boolean>(true);
@@ -95,6 +99,18 @@ export default function App() {
   // Undo / Redo stacks
   const [undoStack, setUndoStack] = useState<SheetData[][]>([]);
   const [redoStack, setRedoStack] = useState<SheetData[][]>([]);
+
+  // Format Painter (Malarz formatów)
+  const [formatPainterStyle, setFormatPainterStyle] = useState<CellStyle | null>(null);
+  const [isFormatPainterLocked, setIsFormatPainterLocked] = useState<boolean>(false);
+
+  // Unified clipboard (Kopiuj / Wytnij / Wklej)
+  const [clipboardData, setClipboardData] = useState<{
+    raw: string;
+    style?: CellStyle;
+    isCut?: boolean;
+    sourceCellId?: string;
+  } | null>(null);
 
   // Modals state
   const [isLeaderboardOpen, setIsLeaderboardOpen] = useState<boolean>(false);
@@ -133,11 +149,22 @@ export default function App() {
     };
   }, []);
 
+  // Track original raw value of the active cell for formula cancellation (Escape)
+  const initialCellRawRef = useRef<string>('');
+
+  useEffect(() => {
+    const raw = activeSheet.cells[activeCellId]?.raw || '';
+    initialCellRawRef.current = raw;
+  }, [activeCellId, activeSheetId]);
+
   // Update formula bar input when active cell changes
   useEffect(() => {
     const cell = activeSheet.cells[activeCellId];
     setFormulaBarValue(cell?.raw || '');
-  }, [activeCellId, activeSheet]);
+    setIsFormulaMode(false);
+    setFormulaPointedRange(null);
+    setHasActiveFormulaRef(false);
+  }, [activeCellId, activeSheetId]);
 
   // Sync state to local storage (offline database)
   const saveToStorage = useCallback((newSheets: SheetData[], newProfile: UserProfile, newBadges: UserBadge[]) => {
@@ -150,6 +177,12 @@ export default function App() {
     } catch {}
   }, []);
 
+  // Trigger celebration banner / toast
+  const triggerToast = useCallback((title: string, desc: string) => {
+    setToastMessage({ title, desc });
+    setTimeout(() => setToastMessage(null), 4500);
+  }, []);
+
   // Push snapshot to undo stack
   const pushUndo = useCallback(() => {
     setUndoStack((prev) => [...prev.slice(-25), sheets]);
@@ -157,28 +190,32 @@ export default function App() {
   }, [sheets]);
 
   const handleUndo = useCallback(() => {
-    if (undoStack.length === 0) return;
+    if (undoStack.length === 0) {
+      triggerToast('Cofnij', 'Brak wcześniejszych operacji do cofnięcia.');
+      return;
+    }
     const previous = undoStack[undoStack.length - 1];
     setUndoStack((prev) => prev.slice(0, -1));
     setRedoStack((prev) => [...prev, sheets]);
     setSheets(previous);
     saveToStorage(previous, userProfile, badges);
-  }, [undoStack, sheets, saveToStorage, userProfile, badges]);
+    triggerToast('Cofnięto (Ctrl+Z)', 'Przywrócono poprzedni stan arkusza.');
+    sounds.playCellClick();
+  }, [undoStack, sheets, saveToStorage, userProfile, badges, triggerToast]);
 
   const handleRedo = useCallback(() => {
-    if (redoStack.length === 0) return;
+    if (redoStack.length === 0) {
+      triggerToast('Ponów', 'Brak operacji do ponowienia.');
+      return;
+    }
     const next = redoStack[redoStack.length - 1];
     setRedoStack((prev) => prev.slice(0, -1));
     setUndoStack((prev) => [...prev, sheets]);
     setSheets(next);
     saveToStorage(next, userProfile, badges);
-  }, [redoStack, sheets, saveToStorage, userProfile, badges]);
-
-  // Trigger celebration banner / toast
-  const triggerToast = (title: string, desc: string) => {
-    setToastMessage({ title, desc });
-    setTimeout(() => setToastMessage(null), 4500);
-  };
+    triggerToast('Ponowiono (Ctrl+Y)', 'Ponowiono cofniętą zmianę.');
+    sounds.playCellClick();
+  }, [redoStack, sheets, saveToStorage, userProfile, badges, triggerToast]);
 
   // Check and unlock badges
   const checkBadgeProgress = useCallback((
@@ -197,7 +234,7 @@ export default function App() {
           let hasSumOrAvg = 0;
           Object.values(sheetToCheck.cells).forEach((c) => {
             if (c.raw.toUpperCase().includes('SUMA') || c.raw.toUpperCase().includes('SUM')) hasSumOrAvg = Math.max(hasSumOrAvg, 1);
-            if (c.raw.toUpperCase().includes('ŚREDNIA') || c.raw.toUpperCase().includes('AVERAGE')) hasSumOrAvg = 2;
+            if (c.raw.toUpperCase().includes('ŚREDNIA') || c.raw.toUpperCase().includes('SREDNIA') || c.raw.toUpperCase().includes('AVERAGE')) hasSumOrAvg = 2;
           });
           newCurrent = Math.max(newCurrent, hasSumOrAvg);
         } else if (badge.id === 'badge-3') { // Logiczny Geniusz
@@ -339,6 +376,239 @@ export default function App() {
     setFormulaBarValue(rawValue);
   }, [activeSheetId, pushUndo, recomputeSheet, verifyCurrentTask, checkBadgeProgress, saveToStorage, userProfile, badges]);
 
+  // Formula point mode handlers
+  const handlePointCell = useCallback((cellId: string) => {
+    const coord = parseCellAddress(cellId);
+    if (!coord) return;
+
+    const updatedFormula = insertOrReplaceCellRef(formulaBarValue, cellId, hasActiveFormulaRef);
+    setFormulaBarValue(updatedFormula);
+    setHasActiveFormulaRef(true);
+    setFormulaPointedRange({
+      startCol: coord.col,
+      startRow: coord.row,
+      endCol: coord.col,
+      endRow: coord.row,
+    });
+
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const prevCell = s.cells[activeCellId] || { raw: '' };
+        const updatedCells = {
+          ...s.cells,
+          [activeCellId]: {
+            ...prevCell,
+            raw: updatedFormula,
+          },
+        };
+        return recomputeSheet({ ...s, cells: updatedCells });
+      });
+      return updated;
+    });
+  }, [formulaBarValue, hasActiveFormulaRef, activeCellId, activeSheetId, recomputeSheet]);
+
+  const handlePointRange = useCallback((range: SelectionRange) => {
+    const c1 = letterToColIndex(range.startCol);
+    const c2 = letterToColIndex(range.endCol);
+    const minC = Math.min(c1, c2);
+    const maxC = Math.max(c1, c2);
+    const minR = Math.min(range.startRow, range.endRow);
+    const maxR = Math.max(range.startRow, range.endRow);
+
+    const startColLetter = colIndexToLetter(minC);
+    const endColLetter = colIndexToLetter(maxC);
+
+    const rangeRef = minC === maxC && minR === maxR
+      ? `${startColLetter}${minR}`
+      : `${startColLetter}${minR}:${endColLetter}${maxR}`;
+
+    const updatedFormula = insertOrReplaceCellRef(formulaBarValue, rangeRef, true);
+    setFormulaBarValue(updatedFormula);
+    setHasActiveFormulaRef(true);
+    setFormulaPointedRange({
+      startCol: startColLetter,
+      startRow: minR,
+      endCol: endColLetter,
+      endRow: maxR,
+    });
+
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const prevCell = s.cells[activeCellId] || { raw: '' };
+        const updatedCells = {
+          ...s.cells,
+          [activeCellId]: {
+            ...prevCell,
+            raw: updatedFormula,
+          },
+        };
+        return recomputeSheet({ ...s, cells: updatedCells });
+      });
+      return updated;
+    });
+  }, [formulaBarValue, activeCellId, activeSheetId, recomputeSheet]);
+
+  // Helper to auto-close unclosed opening parentheses in formulas
+  const autoCloseFormula = (formula: string): string => {
+    let openCount = 0;
+    let closeCount = 0;
+    for (const char of formula) {
+      if (char === '(') openCount++;
+      if (char === ')') closeCount++;
+    }
+    if (openCount > closeCount) {
+      return formula + ')'.repeat(openCount - closeCount);
+    }
+    return formula;
+  };
+
+  // Submit/commit formula (Enter / fx button)
+  const handleSubmitFormula = useCallback((moveRight: boolean = false) => {
+    const rawToCommit = autoCloseFormula(formulaBarValue);
+
+    pushUndo();
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const prevCell = s.cells[activeCellId] || { raw: '' };
+        const updatedCells = {
+          ...s.cells,
+          [activeCellId]: {
+            ...prevCell,
+            raw: rawToCommit,
+          },
+        };
+        const recomputed = recomputeSheet({ ...s, cells: updatedCells });
+        verifyCurrentTask(recomputed);
+        checkBadgeProgress({}, recomputed);
+        return recomputed;
+      });
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+
+    setFormulaBarValue(rawToCommit);
+    initialCellRawRef.current = rawToCommit;
+    setIsFormulaMode(false);
+    setFormulaPointedRange(null);
+    setHasActiveFormulaRef(false);
+    sounds.playCellClick();
+
+    // Excel behavior: Enter moves to cell below (row + 1), Tab moves to cell to right (col + 1)
+    const activeCoord = parseCellAddress(activeCellId);
+    if (activeCoord) {
+      if (moveRight) {
+        const nextCol = colIndexToLetter(letterToColIndex(activeCoord.col) + 1);
+        setActiveCellId(`${nextCol}${activeCoord.row}`);
+      } else {
+        const nextCell = `${activeCoord.col}${activeCoord.row + 1}`;
+        setActiveCellId(nextCell);
+      }
+    }
+  }, [formulaBarValue, activeCellId, activeSheetId, pushUndo, recomputeSheet, verifyCurrentTask, checkBadgeProgress, saveToStorage, userProfile, badges]);
+
+  // Cancel formula (Escape / Cancel button) - reverts cell to initial value before editing
+  const handleCancelFormula = useCallback(() => {
+    const originalValue = initialCellRawRef.current;
+
+    pushUndo();
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const prevCell = s.cells[activeCellId] || { raw: '' };
+        const updatedCells = {
+          ...s.cells,
+          [activeCellId]: {
+            ...prevCell,
+            raw: originalValue,
+          },
+        };
+        const recomputed = recomputeSheet({ ...s, cells: updatedCells });
+        verifyCurrentTask(recomputed);
+        return recomputed;
+      });
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+
+    setFormulaBarValue(originalValue);
+    setIsFormulaMode(false);
+    setFormulaPointedRange(null);
+    setHasActiveFormulaRef(false);
+    sounds.playCellClick();
+  }, [activeSheetId, activeCellId, pushUndo, recomputeSheet, verifyCurrentTask, saveToStorage, userProfile, badges]);
+
+  // Global Enter and Escape keyboard handler for Point Mode (Wskaż)
+  useEffect(() => {
+    if (!isFormulaMode) return;
+
+    const handleGlobalFormulaKeys = (e: KeyboardEvent) => {
+      if (
+        isProfileOpen ||
+        isLeaderboardOpen ||
+        isDailyModalOpen ||
+        isShortcutsOpen ||
+        isChartModalOpen ||
+        isSpeedChallengeOpen
+      ) {
+        return;
+      }
+
+      // Global Ctrl+Z (Undo) and Ctrl+Y (Redo)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        const target = e.target as HTMLElement | null;
+        if (target && target.tagName === 'INPUT' && target.getAttribute('data-formula-input') === 'true') {
+          // Inside formula input, let default behavior or commit
+        }
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+        return;
+      }
+
+      if (e.key === 'Enter') {
+        const target = e.target as HTMLElement | null;
+        if (target && target.tagName === 'INPUT' && target.getAttribute('data-formula-input') === 'true') {
+          return;
+        }
+        e.preventDefault();
+        handleSubmitFormula(false);
+      } else if (e.key === 'Escape') {
+        const target = e.target as HTMLElement | null;
+        if (target && target.tagName === 'INPUT' && target.getAttribute('data-formula-input') === 'true') {
+          return;
+        }
+        e.preventDefault();
+        handleCancelFormula();
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalFormulaKeys);
+    return () => window.removeEventListener('keydown', handleGlobalFormulaKeys);
+  }, [
+    isFormulaMode,
+    isProfileOpen,
+    isLeaderboardOpen,
+    isDailyModalOpen,
+    isShortcutsOpen,
+    isChartModalOpen,
+    isSpeedChallengeOpen,
+    handleSubmitFormula,
+    handleCancelFormula,
+    handleUndo,
+    handleRedo,
+  ]);
+
   // Apply style to active cell or selection range
   const handleApplyStyle = useCallback((stylePatch: Partial<CellStyle>) => {
     pushUndo();
@@ -386,7 +656,155 @@ export default function App() {
     });
   }, [pushUndo, selectionRange, activeCellId, activeSheetId, saveToStorage, userProfile, badges]);
 
-  // Intelligent AutoFill (Dragging Fill Handle)
+  // Format Painter handlers
+  const handleToggleFormatPainter = useCallback((lock: boolean = false) => {
+    if (formatPainterStyle !== null && !lock) {
+      setFormatPainterStyle(null);
+      setIsFormatPainterLocked(false);
+      triggerToast('🖌️ Malarz formatów wyłączony', 'Kopiowanie formatu zostało zakończone.');
+      return;
+    }
+
+    const currentCell = activeSheet.cells[activeCellId];
+    const sourceStyle: CellStyle = currentCell?.style ? { ...currentCell.style } : {};
+
+    setFormatPainterStyle(sourceStyle);
+    setIsFormatPainterLocked(lock);
+
+    if (lock) {
+      triggerToast('🖌️ Malarz formatów przypięty (ciągły)', 'Zaznaczaj kolejne komórki lub wiersze/kolumny. Naciśnij Esc lub kliknij ikonę, aby zakończyć.');
+    } else {
+      triggerToast('🖌️ Malarz formatów aktywny', `Skopiowano styl z ${activeCellId}. Kliknij komórkę, kolumnę lub wiersz, aby nadać format.`);
+    }
+    sounds.playPop();
+  }, [formatPainterStyle, activeSheet, activeCellId, triggerToast]);
+
+  const handleApplyFormatPainter = useCallback((targetRange?: SelectionRange | string) => {
+    if (formatPainterStyle === null) return;
+    pushUndo();
+
+    const cellsToStyle: string[] = [];
+    if (typeof targetRange === 'string') {
+      cellsToStyle.push(targetRange);
+    } else if (targetRange) {
+      const c1 = letterToColIndex(targetRange.startCol);
+      const c2 = letterToColIndex(targetRange.endCol);
+      const minC = Math.min(c1, c2);
+      const maxC = Math.max(c1, c2);
+      const minR = Math.min(targetRange.startRow, targetRange.endRow);
+      const maxR = Math.max(targetRange.startRow, targetRange.endRow);
+
+      for (let r = minR; r <= maxR; r++) {
+        for (let c = minC; c <= maxC; c++) {
+          cellsToStyle.push(`${String.fromCharCode(c + 65)}${r}`);
+        }
+      }
+    } else {
+      cellsToStyle.push(activeCellId);
+    }
+
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const newCells = { ...s.cells };
+        cellsToStyle.forEach((id) => {
+          const current = newCells[id] || { raw: '' };
+          newCells[id] = {
+            ...current,
+            style: { ...formatPainterStyle },
+          };
+        });
+        return { ...s, cells: newCells };
+      });
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+
+    sounds.playSuccess();
+
+    if (!isFormatPainterLocked) {
+      setFormatPainterStyle(null);
+    }
+  }, [formatPainterStyle, isFormatPainterLocked, activeCellId, activeSheetId, pushUndo, saveToStorage, userProfile, badges]);
+
+  const handleCancelFormatPainter = useCallback(() => {
+    setFormatPainterStyle(null);
+    setIsFormatPainterLocked(false);
+  }, []);
+
+  // Clear content of current selection or active cell
+  const handleClearSelection = useCallback(() => {
+    pushUndo();
+    const cellsToClear: string[] = [];
+    if (!selectionRange) {
+      cellsToClear.push(activeCellId);
+    } else {
+      const c1 = letterToColIndex(selectionRange.startCol);
+      const c2 = letterToColIndex(selectionRange.endCol);
+      const minC = Math.min(c1, c2);
+      const maxC = Math.max(c1, c2);
+      const minR = Math.min(selectionRange.startRow, selectionRange.endRow);
+      const maxR = Math.max(selectionRange.startRow, selectionRange.endRow);
+      for (let r = minR; r <= maxR; r++) {
+        for (let c = minC; c <= maxC; c++) {
+          cellsToClear.push(`${String.fromCharCode(c + 65)}${r}`);
+        }
+      }
+    }
+
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const updatedCells = { ...s.cells };
+        cellsToClear.forEach((id) => {
+          if (updatedCells[id]) {
+            updatedCells[id] = { ...updatedCells[id], raw: '', computed: '' };
+          }
+        });
+        const recomputed = recomputeSheet({ ...s, cells: updatedCells });
+        verifyCurrentTask(recomputed);
+        return recomputed;
+      });
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+    setFormulaBarValue('');
+    sounds.playCellClick();
+  }, [selectionRange, activeCellId, activeSheetId, pushUndo, recomputeSheet, verifyCurrentTask, saveToStorage, userProfile, badges]);
+
+  // Unified Clipboard handlers
+  const handleCopy = useCallback(() => {
+    const cell = activeSheet.cells[activeCellId];
+    if (cell) {
+      setClipboardData({ raw: cell.raw, style: cell.style });
+      triggerToast('📋 Skopiowano', `Komórka ${activeCellId} skopiowana do schowka.`);
+      sounds.playPop();
+    }
+  }, [activeSheet, activeCellId, triggerToast]);
+
+  const handleCut = useCallback(() => {
+    const cell = activeSheet.cells[activeCellId];
+    if (cell) {
+      setClipboardData({ raw: cell.raw, style: cell.style, isCut: true, sourceCellId: activeCellId });
+      triggerToast('✂️ Wycięto', `Komórka ${activeCellId} wycięta.`);
+      sounds.playPop();
+    }
+  }, [activeSheet, activeCellId, triggerToast]);
+
+  const handlePaste = useCallback(() => {
+    if (!clipboardData) return;
+    pushUndo();
+    handleCellChange(activeCellId, clipboardData.raw);
+    if (clipboardData.style) {
+      handleApplyStyle(clipboardData.style);
+    }
+    if (clipboardData.isCut && clipboardData.sourceCellId) {
+      handleCellChange(clipboardData.sourceCellId, '');
+      setClipboardData(null);
+    }
+    triggerToast('📋 Wklejono', `Wklejono zawartość do ${activeCellId}.`);
+    sounds.playSuccess();
+  }, [clipboardData, activeCellId, pushUndo, handleCellChange, handleApplyStyle, triggerToast]);
   const handleAutoFill = useCallback((sourceRange: SelectionRange, targetRange: SelectionRange) => {
     pushUndo();
 
@@ -443,6 +861,96 @@ export default function App() {
       return updated;
     });
   }, [pushUndo, activeSheetId, recomputeSheet, verifyCurrentTask, saveToStorage, userProfile, badges]);
+
+  // Move cells handler (Drag & Move cell or selection range like real Excel)
+  const handleMoveCells = useCallback((
+    sourceRange: SelectionRange,
+    targetRange: SelectionRange,
+    newActiveCellId?: string
+  ) => {
+    pushUndo();
+
+    const c1 = letterToColIndex(sourceRange.startCol);
+    const c2 = letterToColIndex(sourceRange.endCol);
+    const minSrcC = Math.min(c1, c2);
+    const maxSrcC = Math.max(c1, c2);
+    const minSrcR = Math.min(sourceRange.startRow, sourceRange.endRow);
+    const maxSrcR = Math.max(sourceRange.startRow, sourceRange.endRow);
+
+    const tc1 = letterToColIndex(targetRange.startCol);
+    const minTgtC = tc1;
+    const minTgtR = Math.min(targetRange.startRow, targetRange.endRow);
+
+    const deltaCol = minTgtC - minSrcC;
+    const deltaRow = minTgtR - minSrcR;
+
+    if (deltaCol === 0 && deltaRow === 0) return;
+
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        const newCells = { ...s.cells };
+
+        // 1. Snapshot all source cell contents
+        const sourceSnapshot: Record<string, any> = {};
+        for (let r = minSrcR; r <= maxSrcR; r++) {
+          for (let c = minSrcC; c <= maxSrcC; c++) {
+            const srcId = `${colIndexToLetter(c)}${r}`;
+            if (newCells[srcId]) {
+              sourceSnapshot[`${c - minSrcC},${r - minSrcR}`] = { ...newCells[srcId] };
+            }
+          }
+        }
+
+        // 2. Clear original source cells
+        for (let r = minSrcR; r <= maxSrcR; r++) {
+          for (let c = minSrcC; c <= maxSrcC; c++) {
+            const srcId = `${colIndexToLetter(c)}${r}`;
+            delete newCells[srcId];
+          }
+        }
+
+        // 3. Write moved cells to destination positions
+        for (let r = minSrcR; r <= maxSrcR; r++) {
+          for (let c = minSrcC; c <= maxSrcC; c++) {
+            const key = `${c - minSrcC},${r - minSrcR}`;
+            const destCol = c + deltaCol;
+            const destRow = r + deltaRow;
+            const destId = `${colIndexToLetter(destCol)}${destRow}`;
+            if (sourceSnapshot[key]) {
+              newCells[destId] = sourceSnapshot[key];
+            }
+          }
+        }
+
+        const recomputed = recomputeSheet({ ...s, cells: newCells });
+        verifyCurrentTask(recomputed);
+        return recomputed;
+      });
+
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+
+    const nextActiveCell = newActiveCellId || `${targetRange.startCol}${targetRange.startRow}`;
+    setActiveCellId(nextActiveCell);
+
+    if (targetRange.startCol === targetRange.endCol && targetRange.startRow === targetRange.endRow) {
+      setSelectionRange(null);
+    } else {
+      setSelectionRange(targetRange);
+    }
+
+    triggerToast(
+      '↔️ Przeniesiono komórki',
+      `Komórki zostały przeniesione do ${targetRange.startCol}${targetRange.startRow}${
+        targetRange.startCol !== targetRange.endCol || targetRange.startRow !== targetRange.endRow
+          ? `:${targetRange.endCol}${targetRange.endRow}`
+          : ''
+      }`
+    );
+    sounds.playSuccess();
+  }, [pushUndo, activeSheetId, recomputeSheet, verifyCurrentTask, saveToStorage, userProfile, badges, triggerToast]);
 
   // AutoSum Σ button handler
   const handleAutoSum = useCallback((formulaType: 'SUMA' | 'ŚREDNIA' | 'MAX' | 'MIN' | 'ILE.LICZB') => {
@@ -648,14 +1156,17 @@ export default function App() {
     if (name === 'Ctrl+B') handleApplyStyle({ bold: !(activeSheet.cells[activeCellId]?.style?.bold) });
     if (name === 'Ctrl+I') handleApplyStyle({ italic: !(activeSheet.cells[activeCellId]?.style?.italic) });
     if (name === 'Ctrl+U') handleApplyStyle({ underline: !(activeSheet.cells[activeCellId]?.style?.underline) });
+    if (name === 'Ctrl+Z') handleUndo();
+    if (name === 'Ctrl+Y') handleRedo();
 
     const newCount = userProfile.shortcutsUsedCount + 1;
     setUserProfile((prev) => ({ ...prev, shortcutsUsedCount: newCount }));
     checkBadgeProgress({ shortcutsUsedCount: newCount }, activeSheet);
-  }, [handleApplyStyle, activeSheet, activeCellId, userProfile.shortcutsUsedCount, checkBadgeProgress]);
+  }, [handleApplyStyle, activeSheet, activeCellId, userProfile.shortcutsUsedCount, checkBadgeProgress, handleUndo, handleRedo]);
 
   // Sheet Tabs Actions
   const handleAddSheet = useCallback(() => {
+    pushUndo();
     const newId = `sheet-${Date.now()}`;
     const newName = `Arkusz${sheets.length + 1}`;
     const newSheet: SheetData = {
@@ -664,27 +1175,74 @@ export default function App() {
       colWidths: {},
       rowHeights: {},
       cells: {},
+      isUserAdded: true,
     };
-    setSheets((prev) => [...prev, newSheet]);
+    setSheets((prev) => {
+      const updated = [...prev, newSheet];
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
     setActiveSheetId(newId);
-  }, [sheets.length]);
+    triggerToast('Nowy arkusz', `Utworzono arkusz "${newName}". Możesz go edytować lub usunąć.`);
+  }, [sheets.length, pushUndo, saveToStorage, userProfile, badges]);
 
   const handleDeleteSheet = useCallback((sheetId: string) => {
     if (sheets.length <= 1) return;
+    const toDelete = sheets.find((s) => s.id === sheetId);
+    pushUndo();
     setSheets((prev) => {
       const filtered = prev.filter((s) => s.id !== sheetId);
       if (activeSheetId === sheetId) {
-        setActiveSheetId(filtered[0].id);
+        setActiveSheetId(filtered[0]?.id || 'akademia-sheet');
       }
+      saveToStorage(filtered, userProfile, badges);
       return filtered;
     });
-  }, [sheets.length, activeSheetId]);
+    triggerToast('Usunięto arkusz', `Arkusz "${toDelete?.name || ''}" został pomyślnie usunięty.`);
+  }, [sheets, activeSheetId, pushUndo, saveToStorage, userProfile, badges]);
 
   const handleRenameSheet = useCallback((sheetId: string, newName: string) => {
-    setSheets((prev) =>
-      prev.map((s) => (s.id === sheetId ? { ...s, name: newName } : s))
-    );
-  }, []);
+    setSheets((prev) => {
+      const updated = prev.map((s) => (s.id === sheetId ? { ...s, name: newName } : s));
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+  }, [saveToStorage, userProfile, badges]);
+
+  // Column & Row Resizing
+  const handleResizeColumn = useCallback((col: string, width: number) => {
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        return {
+          ...s,
+          colWidths: {
+            ...s.colWidths,
+            [col]: Math.max(30, Math.round(width)),
+          },
+        };
+      });
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+  }, [activeSheetId, saveToStorage, userProfile, badges]);
+
+  const handleResizeRow = useCallback((row: number, height: number) => {
+    setSheets((prevSheets) => {
+      const updated = prevSheets.map((s) => {
+        if (s.id !== activeSheetId) return s;
+        return {
+          ...s,
+          rowHeights: {
+            ...s.rowHeights,
+            [row]: Math.max(18, Math.round(height)),
+          },
+        };
+      });
+      saveToStorage(updated, userProfile, badges);
+      return updated;
+    });
+  }, [activeSheetId, saveToStorage, userProfile, badges]);
 
   // Daily Bonus XP claim
   const handleClaimDailyBonus = () => {
@@ -747,44 +1305,52 @@ export default function App() {
       />
 
       {/* Office 365 Ribbon */}
-      <ExcelRibbon
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        currentStyle={activeSheet.cells[activeCellId]?.style}
-        onApplyStyle={handleApplyStyle}
-        onAutoSum={handleAutoSum}
-        onSort={handleSort}
-        onInsertRow={handleInsertRow}
-        onDeleteRow={handleDeleteRow}
-        onClearCell={() => handleCellChange(activeCellId, '')}
-        onInsertFunctionTemplate={(tmpl) => handleCellChange(activeCellId, tmpl)}
-        onExportCSV={handleExportCSV}
-        onImportCSV={handleImportCSV}
-        onOpenChartModal={(type) => {
-          if (type) setChartModalInitialType(type);
-          setIsChartModalOpen(true);
-        }}
-        onOpenLeaderboard={() => setIsLeaderboardOpen(true)}
-        onOpenSpeedChallenge={() => setIsSpeedChallengeOpen(true)}
-        onToggleLearningPanel={() => setIsLearningPanelOpen(!isLearningPanelOpen)}
-        onShowLessonHint={() => {
-          setIsLearningPanelOpen(true);
-        }}
-        onResetLessonData={() => {
-          const fresh = INITIAL_SHEETS.find((s) => s.id === 'akademia-sheet');
-          if (fresh) {
-            setSheets((prev) => prev.map((s) => (s.id === 'akademia-sheet' ? fresh : s)));
-            triggerToast('Reset Lekcji', 'Przywrócono początkowe dane w arkuszu Akademii.');
-          }
-        }}
-        showGridlines={showGridlines}
-        onToggleGridlines={() => setShowGridlines(!showGridlines)}
-        showHeaders={showHeaders}
-        onToggleHeaders={() => setShowHeaders(!showHeaders)}
-        zoomLevel={zoomLevel}
-        onSetZoom={setZoomLevel}
-        isDarkMode={isDarkMode}
-      />
+      <div className="relative z-30">
+        <ExcelRibbon
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          currentStyle={activeSheet.cells[activeCellId]?.style}
+          onApplyStyle={handleApplyStyle}
+          onAutoSum={handleAutoSum}
+          onSort={handleSort}
+          onInsertRow={handleInsertRow}
+          onDeleteRow={handleDeleteRow}
+          onClearCell={handleClearSelection}
+          onInsertFunctionTemplate={(tmpl) => handleCellChange(activeCellId, tmpl)}
+          onExportCSV={handleExportCSV}
+          onImportCSV={handleImportCSV}
+          onOpenChartModal={(type) => {
+            if (type) setChartModalInitialType(type);
+            setIsChartModalOpen(true);
+          }}
+          onOpenLeaderboard={() => setIsLeaderboardOpen(true)}
+          onOpenSpeedChallenge={() => setIsSpeedChallengeOpen(true)}
+          onToggleLearningPanel={() => setIsLearningPanelOpen(!isLearningPanelOpen)}
+          onShowLessonHint={() => {
+            setIsLearningPanelOpen(true);
+          }}
+          onResetLessonData={() => {
+            const fresh = INITIAL_SHEETS.find((s) => s.id === 'akademia-sheet');
+            if (fresh) {
+              setSheets((prev) => prev.map((s) => (s.id === 'akademia-sheet' ? fresh : s)));
+              triggerToast('Reset Lekcji', 'Przywrócono początkowe dane w arkuszu Akademii.');
+            }
+          }}
+          showGridlines={showGridlines}
+          onToggleGridlines={() => setShowGridlines(!showGridlines)}
+          showHeaders={showHeaders}
+          onToggleHeaders={() => setShowHeaders(!showHeaders)}
+          zoomLevel={zoomLevel}
+          onSetZoom={setZoomLevel}
+          isDarkMode={isDarkMode}
+          isFormatPainterActive={formatPainterStyle !== null}
+          isFormatPainterLocked={isFormatPainterLocked}
+          onToggleFormatPainter={handleToggleFormatPainter}
+          onCopy={handleCopy}
+          onCut={handleCut}
+          onPaste={handlePaste}
+        />
+      </div>
 
       {/* Formula Bar */}
       <FormulaBar
@@ -795,18 +1361,38 @@ export default function App() {
             : ''
         }
         currentValue={formulaBarValue}
+        isFormulaMode={isFormulaMode}
         onValueChange={(val) => {
           setFormulaBarValue(val);
+          if (val.startsWith('=')) {
+            setIsFormulaMode(true);
+          } else {
+            setIsFormulaMode(false);
+          }
+          const lastChar = val.trimEnd().slice(-1);
+          const operatorChars = ['=', '(', '+', '-', '*', '/', ',', ';', ':', '>', '<', '&'];
+          if (operatorChars.includes(lastChar)) {
+            setHasActiveFormulaRef(false);
+            setFormulaPointedRange(null);
+          }
+          if (!val.startsWith('=')) {
+            setFormulaPointedRange(null);
+            setHasActiveFormulaRef(false);
+          }
           handleCellChange(activeCellId, val);
         }}
-        onSubmit={() => {
-          handleCellChange(activeCellId, formulaBarValue);
+        onSubmit={() => handleSubmitFormula(false)}
+        onCancel={handleCancelFormula}
+        onJumpToCell={(cellId) => {
+          setActiveCellId(cellId);
+          setIsFormulaMode(false);
+          setFormulaPointedRange(null);
+          setHasActiveFormulaRef(false);
         }}
-        onCancel={() => {
-          setFormulaBarValue(activeSheet.cells[activeCellId]?.raw || '');
+        onOpenFunctionsMenu={() => {
+          setActiveTab('formulas');
+          setIsFormulaMode(true);
         }}
-        onJumpToCell={(cellId) => setActiveCellId(cellId)}
-        onOpenFunctionsMenu={() => setActiveTab('formulas')}
         isDarkMode={isDarkMode}
       />
 
@@ -816,7 +1402,12 @@ export default function App() {
           sheet={activeSheet}
           activeCellId={activeCellId}
           selectionRange={selectionRange}
-          onSelectCell={setActiveCellId}
+          onSelectCell={(cellId) => {
+            setActiveCellId(cellId);
+            setIsFormulaMode(false);
+            setFormulaPointedRange(null);
+            setHasActiveFormulaRef(false);
+          }}
           onSelectRange={setSelectionRange}
           onCellChange={handleCellChange}
           onAutoFill={handleAutoFill}
@@ -831,6 +1422,36 @@ export default function App() {
           onDeleteRow={handleDeleteRow}
           onAutoSum={handleAutoSum}
           onOpenChartModal={() => setIsChartModalOpen(true)}
+          isFormulaMode={isFormulaMode}
+          formulaPointedRange={formulaPointedRange}
+          onPointCell={handlePointCell}
+          onPointRange={handlePointRange}
+          onSubmitFormula={handleSubmitFormula}
+          onCancelFormula={handleCancelFormula}
+          onResizeColumn={handleResizeColumn}
+          onResizeRow={handleResizeRow}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          isFormatPainterActive={formatPainterStyle !== null}
+          isFormatPainterLocked={isFormatPainterLocked}
+          formatPainterStyle={formatPainterStyle}
+          onToggleFormatPainter={handleToggleFormatPainter}
+          onApplyFormatPainter={handleApplyFormatPainter}
+          onCancelFormatPainter={handleCancelFormatPainter}
+          onClearSelection={handleClearSelection}
+          onCopy={handleCopy}
+          onCut={handleCut}
+          onPaste={handlePaste}
+          onMoveCells={handleMoveCells}
+          onCellTyping={(val) => {
+            setFormulaBarValue(val);
+            if (val.startsWith('=')) {
+              setIsFormulaMode(true);
+            } else {
+              setIsFormulaMode(false);
+            }
+            handleCellChange(activeCellId, val);
+          }}
         />
 
         {/* Learning Academy Panel */}
@@ -881,6 +1502,7 @@ export default function App() {
         onSetZoom={setZoomLevel}
         isOnline={isOnline}
         isDarkMode={isDarkMode}
+        isFormulaMode={isFormulaMode}
       />
 
       {/* Modals */}

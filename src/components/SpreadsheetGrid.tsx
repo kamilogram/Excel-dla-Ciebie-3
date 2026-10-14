@@ -18,6 +18,9 @@ import {
   AlignCenter,
   AlignRight,
   Sparkles,
+  Paintbrush,
+  Move,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   SheetData,
@@ -51,6 +54,28 @@ interface SpreadsheetGridProps {
   onDeleteRow?: () => void;
   onAutoSum?: (formulaType: 'SUMA') => void;
   onOpenChartModal?: () => void;
+  isFormulaMode?: boolean;
+  formulaPointedRange?: SelectionRange | null;
+  onPointCell?: (cellId: string) => void;
+  onPointRange?: (range: SelectionRange) => void;
+  onSubmitFormula?: (moveRight?: boolean) => void;
+  onCancelFormula?: () => void;
+  onResizeColumn?: (col: string, width: number) => void;
+  onResizeRow?: (row: number, height: number) => void;
+  onUndo?: () => void;
+  onRedo?: () => void;
+  onCellTyping?: (val: string) => void;
+  isFormatPainterActive?: boolean;
+  isFormatPainterLocked?: boolean;
+  formatPainterStyle?: CellStyle | null;
+  onToggleFormatPainter?: (lock?: boolean) => void;
+  onApplyFormatPainter?: (targetRange?: SelectionRange | string) => void;
+  onCancelFormatPainter?: () => void;
+  onClearSelection?: () => void;
+  onCopy?: () => void;
+  onCut?: () => void;
+  onPaste?: () => void;
+  onMoveCells?: (sourceRange: SelectionRange, targetRange: SelectionRange, newActiveCellId?: string) => void;
 }
 
 const DEFAULT_COLS = 26; // A to Z
@@ -77,10 +102,71 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   onDeleteRow,
   onAutoSum,
   onOpenChartModal,
+  isFormulaMode = false,
+  formulaPointedRange = null,
+  onPointCell,
+  onPointRange,
+  onSubmitFormula,
+  onCancelFormula,
+  onResizeColumn,
+  onResizeRow,
+  onUndo,
+  onRedo,
+  onCellTyping,
+  isFormatPainterActive = false,
+  isFormatPainterLocked = false,
+  formatPainterStyle = null,
+  onToggleFormatPainter,
+  onApplyFormatPainter,
+  onCancelFormatPainter,
+  onClearSelection,
+  onCopy,
+  onCut,
+  onPaste,
+  onMoveCells,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [editValue, setEditValue] = useState('');
   const [isSelecting, setIsSelecting] = useState(false);
+
+  // Drag & Move Cells States (Excel Drag and Drop Border)
+  const [isDraggingCells, setIsDraggingCells] = useState(false);
+  const [dragOrigin, setDragOrigin] = useState<{ colIdx: number; row: number } | null>(null);
+  const [dragDelta, setDragDelta] = useState<{ col: number; row: number }>({ col: 0, row: 0 });
+  const [moveConfirmation, setMoveConfirmation] = useState<{
+    sourceRange: SelectionRange;
+    targetRange: SelectionRange;
+    newActiveCellId: string;
+    overwrittenCount: number;
+  } | null>(null);
+
+  // Column and Row Selection States (Whole col/row selection)
+  const [isSelectingCols, setIsSelectingCols] = useState(false);
+  const [colSelectStart, setColSelectStart] = useState<string | null>(null);
+
+  const [isSelectingRows, setIsSelectingRows] = useState(false);
+  const [rowSelectStart, setRowSelectStart] = useState<number | null>(null);
+
+  const mouseDownCellIdRef = useRef<string | null>(null);
+
+  // Column and Row Resize States
+  const [resizingCol, setResizingCol] = useState<{
+    col: string;
+    startX: number;
+    startWidth: number;
+    currentWidth: number;
+  } | null>(null);
+
+  const [resizingRow, setResizingRow] = useState<{
+    row: number;
+    startY: number;
+    startHeight: number;
+    currentHeight: number;
+  } | null>(null);
+
+  // Formula Pointing Drag State
+  const [isPointingFormula, setIsPointingFormula] = useState(false);
+  const [formulaPointStart, setFormulaPointStart] = useState<string | null>(null);
 
   // Autofill Dragging States
   const [isDraggingFillHandle, setIsDraggingFillHandle] = useState(false);
@@ -104,13 +190,213 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
 
-  // Column and row sizes
-  const getColWidth = useCallback((col: string) => sheet.colWidths?.[col] || DEFAULT_COL_WIDTH, [sheet.colWidths]);
-  const getRowHeight = useCallback((row: number) => sheet.rowHeights?.[row] || DEFAULT_ROW_HEIGHT, [sheet.rowHeights]);
+  // Column and row sizes (responsive to active dragging)
+  const getColWidth = useCallback(
+    (col: string) => {
+      if (resizingCol && resizingCol.col === col) {
+        return resizingCol.currentWidth;
+      }
+      return sheet.colWidths?.[col] || DEFAULT_COL_WIDTH;
+    },
+    [sheet.colWidths, resizingCol]
+  );
+
+  const getRowHeight = useCallback(
+    (row: number) => {
+      if (resizingRow && resizingRow.row === row) {
+        return resizingRow.currentHeight;
+      }
+      return sheet.rowHeights?.[row] || DEFAULT_ROW_HEIGHT;
+    },
+    [sheet.rowHeights, resizingRow]
+  );
+
+  // Column and Row Resize Handlers
+  const handleColResizeStart = (col: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentWidth = getColWidth(col);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    setResizingCol({
+      col,
+      startX: e.clientX,
+      startWidth: currentWidth,
+      currentWidth,
+    });
+  };
+
+  const handleColAutoFit = (col: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    let maxLen = 0;
+    for (let r = 1; r <= DEFAULT_ROWS; r++) {
+      const cell = sheet.cells[`${col}${r}`];
+      if (cell) {
+        const text = cell.computed !== undefined ? String(cell.computed) : cell.raw || '';
+        if (text.length > maxLen) maxLen = text.length;
+      }
+    }
+    const autoWidth = Math.max(60, Math.min(450, Math.round(maxLen * 9 + 32)));
+    onResizeColumn?.(col, autoWidth);
+  };
+
+  const handleRowResizeStart = (row: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const currentHeight = getRowHeight(row);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    setResizingRow({
+      row,
+      startY: e.clientY,
+      startHeight: currentHeight,
+      currentHeight,
+    });
+  };
+
+  const handleRowResetHeight = (row: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onResizeRow?.(row, DEFAULT_ROW_HEIGHT);
+  };
+
+  // Window listeners for dragging column resize
+  useEffect(() => {
+    if (!resizingCol) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const scale = zoomLevel / 100;
+      const deltaX = (e.clientX - resizingCol.startX) / scale;
+      const newWidth = Math.max(30, Math.round(resizingCol.startWidth + deltaX));
+      setResizingCol((prev) => (prev ? { ...prev, currentWidth: newWidth } : null));
+    };
+
+    const handleMouseUp = () => {
+      if (resizingCol && onResizeColumn) {
+        onResizeColumn(resizingCol.col, resizingCol.currentWidth);
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResizingCol(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingCol, zoomLevel, onResizeColumn]);
+
+  // Window listeners for dragging row resize
+  useEffect(() => {
+    if (!resizingRow) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const scale = zoomLevel / 100;
+      const deltaY = (e.clientY - resizingRow.startY) / scale;
+      const newHeight = Math.max(18, Math.round(resizingRow.startHeight + deltaY));
+      setResizingRow((prev) => (prev ? { ...prev, currentHeight: newHeight } : null));
+    };
+
+    const handleMouseUp = () => {
+      if (resizingRow && onResizeRow) {
+        onResizeRow(resizingRow.row, resizingRow.currentHeight);
+      }
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setResizingRow(null);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizingRow, zoomLevel, onResizeRow]);
 
   // Active cell coordinate
   const activeCoord = parseCellAddress(activeCellId) || { col: 'A', row: 1 };
   const activeColIdx = letterToColIndex(activeCoord.col);
+
+  // Calculate regular selection bounds
+  const getSelectionBounds = useCallback(() => {
+    const range = selectionRange || {
+      startCol: activeCoord.col,
+      startRow: activeCoord.row,
+      endCol: activeCoord.col,
+      endRow: activeCoord.row,
+    };
+
+    const c1 = letterToColIndex(range.startCol);
+    const c2 = letterToColIndex(range.endCol);
+    const minColIdx = Math.min(c1, c2);
+    const maxColIdx = Math.max(c1, c2);
+
+    const minRow = Math.min(range.startRow, range.endRow);
+    const maxRow = Math.max(range.startRow, range.endRow);
+
+    return { minColIdx, maxColIdx, minRow, maxRow };
+  }, [selectionRange, activeCoord]);
+
+  const { minColIdx, maxColIdx, minRow, maxRow } = getSelectionBounds();
+
+  const isEntireSheetSelected =
+    minColIdx === 0 &&
+    maxColIdx === DEFAULT_COLS - 1 &&
+    minRow === 1 &&
+    maxRow === DEFAULT_ROWS;
+
+  const isEntireRowSelected = minColIdx === 0 && maxColIdx === DEFAULT_COLS - 1;
+  const isEntireColSelected = minRow === 1 && maxRow === DEFAULT_ROWS;
+
+  // Drag & Move border handler
+  const handleDragBorderStart = (e: React.MouseEvent, colIdx: number, row: number) => {
+    if (e.button !== 0) return; // Only left click
+    if (isEditing) commitEdit();
+    e.preventDefault();
+    e.stopPropagation();
+
+    setIsDraggingCells(true);
+    setDragOrigin({ colIdx, row });
+    setDragDelta({ col: 0, row: 0 });
+    sounds.playCellClick();
+  };
+
+  const handleGlobalMouseMove = useCallback(
+    (e: MouseEvent) => {
+      if (isDraggingCells && dragOrigin) {
+        const elem = document.elementFromPoint(e.clientX, e.clientY);
+        const td = elem?.closest('td[data-cell-id]');
+        if (td) {
+          const cellId = td.getAttribute('data-cell-id');
+          if (cellId) {
+            const target = parseCellAddress(cellId);
+            if (target) {
+              const targetColIdx = letterToColIndex(target.col);
+              const dCol = targetColIdx - dragOrigin.colIdx;
+              const dRow = target.row - dragOrigin.row;
+
+              const clampedDCol = Math.max(-minColIdx, Math.min(DEFAULT_COLS - 1 - maxColIdx, dCol));
+              const clampedDRow = Math.max(1 - minRow, Math.min(DEFAULT_ROWS - maxRow, dRow));
+
+              setDragDelta({ col: clampedDCol, row: clampedDRow });
+            }
+          }
+        }
+      }
+    },
+    [isDraggingCells, dragOrigin, minColIdx, maxColIdx, minRow, maxRow]
+  );
+
+  useEffect(() => {
+    if (isDraggingCells) {
+      window.addEventListener('mousemove', handleGlobalMouseMove);
+      return () => window.removeEventListener('mousemove', handleGlobalMouseMove);
+    }
+  }, [isDraggingCells, handleGlobalMouseMove]);
 
   // Focus editing input when editing starts
   useEffect(() => {
@@ -132,10 +418,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   // Enter edit mode
   const startEditing = useCallback((initialVal?: string) => {
     const currentRaw = sheet.cells[activeCellId]?.raw || '';
-    setEditValue(initialVal !== undefined ? initialVal : currentRaw);
+    const newVal = initialVal !== undefined ? initialVal : currentRaw;
+    setEditValue(newVal);
     setIsEditing(true);
     setContextMenu(null);
-  }, [sheet.cells, activeCellId]);
+    if (initialVal !== undefined) {
+      onCellTyping?.(newVal);
+    }
+  }, [sheet.cells, activeCellId, onCellTyping]);
 
   const commitEdit = useCallback(() => {
     if (isEditing) {
@@ -153,24 +443,159 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     if (isEditing) {
       if (e.key === 'Enter') {
         e.preventDefault();
-        commitEdit();
-        // Move down
-        const nextCell = `${activeCoord.col}${activeCoord.row + 1}`;
-        onSelectCell(nextCell);
+        if (editValue.startsWith('=')) {
+          setIsEditing(false);
+          onSubmitFormula?.(false);
+        } else {
+          commitEdit();
+          // Move down
+          const nextCell = `${activeCoord.col}${activeCoord.row + 1}`;
+          onSelectCell(nextCell);
+        }
+        return;
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        commitEdit();
-        // Move right
-        const nextCol = colIndexToLetter(activeColIdx + 1);
-        onSelectCell(`${nextCol}${activeCoord.row}`);
+        if (editValue.startsWith('=')) {
+          setIsEditing(false);
+          onSubmitFormula?.(true);
+        } else {
+          commitEdit();
+          // Move right
+          const nextCol = colIndexToLetter(activeColIdx + 1);
+          onSelectCell(`${nextCol}${activeCoord.row}`);
+        }
+        return;
       } else if (e.key === 'Escape') {
         e.preventDefault();
-        cancelEdit();
+        if (editValue.startsWith('=')) {
+          setIsEditing(false);
+          onCancelFormula?.();
+        } else {
+          cancelEdit();
+        }
+        return;
       }
       return;
     }
 
+    // Tryb "Wskaż" - zatwierdzanie Enterem i anulowanie Escapem w arkuszu
+    if (isFormulaMode) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onSubmitFormula?.(false);
+        return;
+      }
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        onSubmitFormula?.(true);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        if (isFormatPainterActive) {
+          onCancelFormatPainter?.();
+          return;
+        }
+        onCancelFormula?.();
+        return;
+      }
+    }
+
+    // Handle Move Confirmation Dialog Keyboard Shortcuts
+    if (moveConfirmation) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setMoveConfirmation(null);
+        sounds.playCellClick();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        onMoveCells?.(
+          moveConfirmation.sourceRange,
+          moveConfirmation.targetRange,
+          moveConfirmation.newActiveCellId
+        );
+        setMoveConfirmation(null);
+        return;
+      }
+    }
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if (isDraggingCells) {
+        setIsDraggingCells(false);
+        setDragDelta({ col: 0, row: 0 });
+        setDragOrigin(null);
+        return;
+      }
+      if (isFormatPainterActive) {
+        onCancelFormatPainter?.();
+        return;
+      }
+      if (contextMenu) {
+        setContextMenu(null);
+        return;
+      }
+      if (selectionRange) {
+        onSelectRange(null);
+        return;
+      }
+      return;
+    }
+
+    // Select All Shortcut (Ctrl+A)
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+      e.preventDefault();
+      const maxColLetter = colIndexToLetter(DEFAULT_COLS - 1);
+      const allRange = {
+        startCol: 'A',
+        startRow: 1,
+        endCol: maxColLetter,
+        endRow: DEFAULT_ROWS,
+      };
+      onSelectCell('A1');
+      onSelectRange(allRange);
+      if (isFormatPainterActive) {
+        onApplyFormatPainter?.(allRange);
+      }
+      onShortcutUsed?.('Ctrl+A');
+      return;
+    }
+
     // Global Shortcuts
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      e.preventDefault();
+      if (e.shiftKey) {
+        onRedo?.();
+        onShortcutUsed?.('Ctrl+Y');
+      } else {
+        onUndo?.();
+        onShortcutUsed?.('Ctrl+Z');
+      }
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      e.preventDefault();
+      onRedo?.();
+      onShortcutUsed?.('Ctrl+Y');
+      return;
+    }
+
+    // Copy / Paste Format (Ctrl+Shift+C / Ctrl+Shift+V)
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'c') {
+      e.preventDefault();
+      onToggleFormatPainter?.(false);
+      onShortcutUsed?.('Ctrl+Shift+C');
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'v') {
+      e.preventDefault();
+      onApplyFormatPainter?.(selectionRange || activeCellId);
+      onShortcutUsed?.('Ctrl+Shift+V');
+      return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
       e.preventDefault();
       onShortcutUsed?.('Ctrl+B');
@@ -190,32 +615,42 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     // Copy / Cut / Paste shortcuts
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
       e.preventDefault();
-      const cell = sheet.cells[activeCellId];
-      if (cell) {
-        setClipboardData({ raw: cell.raw, style: cell.style });
-        onShortcutUsed?.('Ctrl+C');
+      if (onCopy) {
+        onCopy();
+      } else {
+        const cell = sheet.cells[activeCellId];
+        if (cell) {
+          setClipboardData({ raw: cell.raw, style: cell.style });
+        }
       }
+      onShortcutUsed?.('Ctrl+C');
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'x') {
       e.preventDefault();
-      const cell = sheet.cells[activeCellId];
-      if (cell) {
-        setClipboardData({ raw: cell.raw, style: cell.style, isCut: true, sourceCellId: activeCellId });
-        onShortcutUsed?.('Ctrl+X');
+      if (onCut) {
+        onCut();
+      } else {
+        const cell = sheet.cells[activeCellId];
+        if (cell) {
+          setClipboardData({ raw: cell.raw, style: cell.style, isCut: true, sourceCellId: activeCellId });
+        }
       }
+      onShortcutUsed?.('Ctrl+X');
       return;
     }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
       e.preventDefault();
-      if (clipboardData) {
+      if (onPaste) {
+        onPaste();
+      } else if (clipboardData) {
         onCellChange(activeCellId, clipboardData.raw);
         if (clipboardData.isCut && clipboardData.sourceCellId) {
           onCellChange(clipboardData.sourceCellId, '');
           setClipboardData(null);
         }
-        onShortcutUsed?.('Ctrl+V');
       }
+      onShortcutUsed?.('Ctrl+V');
       return;
     }
 
@@ -227,7 +662,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
       e.preventDefault();
-      onCellChange(activeCellId, '');
+      if (onClearSelection) {
+        onClearSelection();
+      } else {
+        onCellChange(activeCellId, '');
+      }
       return;
     }
 
@@ -286,6 +725,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     }
   }, [
     isEditing,
+    editValue,
+    isFormulaMode,
+    onSubmitFormula,
+    onCancelFormula,
     commitEdit,
     cancelEdit,
     activeCoord,
@@ -302,21 +745,41 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   // Handle Mouse Selection
   const handleCellMouseDown = (cellId: string, e: React.MouseEvent) => {
     if (e.button !== 0) return; // Only left click
+
+    // If formula mode is active:
+    if (isFormulaMode) {
+      if (cellId !== activeCellId) {
+        e.preventDefault();
+        sounds.playCellClick();
+        setIsEditing(false);
+        setIsPointingFormula(true);
+        setFormulaPointStart(cellId);
+        onPointCell?.(cellId);
+        gridContainerRef.current?.focus();
+        return;
+      }
+    }
+
     if (isEditing) commitEdit();
     setContextMenu(null);
 
     sounds.playCellClick();
+    mouseDownCellIdRef.current = cellId;
 
     if (e.shiftKey) {
       // Expand selection range from active to clicked
       const clicked = parseCellAddress(cellId);
       if (clicked) {
-        onSelectRange({
+        const newRange = {
           startCol: activeCoord.col,
           startRow: activeCoord.row,
           endCol: clicked.col,
           endRow: clicked.row,
-        });
+        };
+        onSelectRange(newRange);
+        if (isFormatPainterActive) {
+          onApplyFormatPainter?.(newRange);
+        }
       }
     } else {
       onSelectCell(cellId);
@@ -326,6 +789,36 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   };
 
   const handleCellMouseEnter = (cellId: string) => {
+    // If dragging while in formula pointing mode, expand range
+    if (isPointingFormula && formulaPointStart) {
+      const startCoord = parseCellAddress(formulaPointStart);
+      const currCoord = parseCellAddress(cellId);
+      if (startCoord && currCoord) {
+        onPointRange?.({
+          startCol: startCoord.col,
+          startRow: startCoord.row,
+          endCol: currCoord.col,
+          endRow: currCoord.row,
+        });
+      }
+      return;
+    }
+
+    if (isDraggingCells && dragOrigin) {
+      const target = parseCellAddress(cellId);
+      if (target) {
+        const targetColIdx = letterToColIndex(target.col);
+        const dCol = targetColIdx - dragOrigin.colIdx;
+        const dRow = target.row - dragOrigin.row;
+
+        const clampedDCol = Math.max(-minColIdx, Math.min(DEFAULT_COLS - 1 - maxColIdx, dCol));
+        const clampedDRow = Math.max(1 - minRow, Math.min(DEFAULT_ROWS - maxRow, dRow));
+
+        setDragDelta({ col: clampedDCol, row: clampedDRow });
+      }
+      return;
+    }
+
     if (isSelecting) {
       const target = parseCellAddress(cellId);
       if (target) {
@@ -338,6 +831,172 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       }
     } else if (isDraggingFillHandle) {
       setFillTargetCell(cellId);
+    }
+  };
+
+  // Column Header Selection Handlers (Excel Style)
+  const handleColHeaderMouseDown = (colLetter: string, cIdx: number, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if (isEditing) commitEdit();
+    setContextMenu(null);
+    sounds.playCellClick();
+
+    if (isFormulaMode) {
+      onPointRange?.({
+        startCol: colLetter,
+        startRow: 1,
+        endCol: colLetter,
+        endRow: DEFAULT_ROWS,
+      });
+      return;
+    }
+
+    if (e.shiftKey && selectionRange) {
+      const newRange: SelectionRange = {
+        startCol: selectionRange.startCol,
+        startRow: 1,
+        endCol: colLetter,
+        endRow: DEFAULT_ROWS,
+      };
+      onSelectRange(newRange);
+      if (isFormatPainterActive) {
+        onApplyFormatPainter?.(newRange);
+      }
+    } else {
+      onSelectCell(`${colLetter}1`);
+      const newRange: SelectionRange = {
+        startCol: colLetter,
+        startRow: 1,
+        endCol: colLetter,
+        endRow: DEFAULT_ROWS,
+      };
+      onSelectRange(newRange);
+      setIsSelectingCols(true);
+      setColSelectStart(colLetter);
+    }
+  };
+
+  const handleColHeaderMouseEnter = (colLetter: string) => {
+    if (isSelectingCols && colSelectStart) {
+      onSelectRange({
+        startCol: colSelectStart,
+        startRow: 1,
+        endCol: colLetter,
+        endRow: DEFAULT_ROWS,
+      });
+    }
+  };
+
+  const handleColContextMenu = (colLetter: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    sounds.playCellClick();
+    onSelectCell(`${colLetter}1`);
+    onSelectRange({
+      startCol: colLetter,
+      startRow: 1,
+      endCol: colLetter,
+      endRow: DEFAULT_ROWS,
+    });
+    setContextMenu({
+      x: Math.min(e.clientX, window.innerWidth - 280),
+      y: Math.min(e.clientY, window.innerHeight - 380),
+      cellId: `${colLetter}1`,
+    });
+  };
+
+  // Row Header Selection Handlers (Excel Style)
+  const handleRowHeaderMouseDown = (rowNumber: number, e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    if (isEditing) commitEdit();
+    setContextMenu(null);
+    sounds.playCellClick();
+
+    const maxColLetter = colIndexToLetter(DEFAULT_COLS - 1);
+
+    if (isFormulaMode) {
+      onPointRange?.({
+        startCol: 'A',
+        startRow: rowNumber,
+        endCol: maxColLetter,
+        endRow: rowNumber,
+      });
+      return;
+    }
+
+    if (e.shiftKey && selectionRange) {
+      const newRange: SelectionRange = {
+        startCol: 'A',
+        startRow: selectionRange.startRow,
+        endCol: maxColLetter,
+        endRow: rowNumber,
+      };
+      onSelectRange(newRange);
+      if (isFormatPainterActive) {
+        onApplyFormatPainter?.(newRange);
+      }
+    } else {
+      onSelectCell(`A${rowNumber}`);
+      const newRange: SelectionRange = {
+        startCol: 'A',
+        startRow: rowNumber,
+        endCol: maxColLetter,
+        endRow: rowNumber,
+      };
+      onSelectRange(newRange);
+      setIsSelectingRows(true);
+      setRowSelectStart(rowNumber);
+    }
+  };
+
+  const handleRowHeaderMouseEnter = (rowNumber: number) => {
+    if (isSelectingRows && rowSelectStart !== null) {
+      const maxColLetter = colIndexToLetter(DEFAULT_COLS - 1);
+      onSelectRange({
+        startCol: 'A',
+        startRow: rowSelectStart,
+        endCol: maxColLetter,
+        endRow: rowNumber,
+      });
+    }
+  };
+
+  const handleRowContextMenu = (rowNumber: number, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    sounds.playCellClick();
+    const maxColLetter = colIndexToLetter(DEFAULT_COLS - 1);
+    onSelectCell(`A${rowNumber}`);
+    onSelectRange({
+      startCol: 'A',
+      startRow: rowNumber,
+      endCol: maxColLetter,
+      endRow: rowNumber,
+    });
+    setContextMenu({
+      x: Math.min(e.clientX, window.innerWidth - 280),
+      y: Math.min(e.clientY, window.innerHeight - 380),
+      cellId: `A${rowNumber}`,
+    });
+  };
+
+  // Select Entire Sheet (Corner Cell ◢)
+  const handleSelectAll = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (isEditing) commitEdit();
+    setContextMenu(null);
+    sounds.playCellClick();
+    const maxColLetter = colIndexToLetter(DEFAULT_COLS - 1);
+    const allRange: SelectionRange = {
+      startCol: 'A',
+      startRow: 1,
+      endCol: maxColLetter,
+      endRow: DEFAULT_ROWS,
+    };
+    onSelectCell('A1');
+    onSelectRange(allRange);
+    if (isFormatPainterActive) {
+      onApplyFormatPainter?.(allRange);
     }
   };
 
@@ -369,8 +1028,99 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   // Global Mouse Up for drag selection & autofill release
   const handleGlobalMouseUp = useCallback(() => {
+    if (isPointingFormula) {
+      setIsPointingFormula(false);
+      setFormulaPointStart(null);
+      gridContainerRef.current?.focus();
+    }
+    if (isSelectingCols) {
+      setIsSelectingCols(false);
+      setColSelectStart(null);
+      if (isFormatPainterActive && selectionRange) {
+        onApplyFormatPainter?.(selectionRange);
+      }
+    }
+    if (isSelectingRows) {
+      setIsSelectingRows(false);
+      setRowSelectStart(null);
+      if (isFormatPainterActive && selectionRange) {
+        onApplyFormatPainter?.(selectionRange);
+      }
+    }
     if (isSelecting) {
       setIsSelecting(false);
+      if (isFormatPainterActive) {
+        const clickedId = mouseDownCellIdRef.current;
+        const clickedCoord = clickedId ? parseCellAddress(clickedId) : null;
+        const targetRange: SelectionRange = selectionRange || (clickedCoord ? {
+          startCol: clickedCoord.col,
+          startRow: clickedCoord.row,
+          endCol: clickedCoord.col,
+          endRow: clickedCoord.row,
+        } : {
+          startCol: activeCoord.col,
+          startRow: activeCoord.row,
+          endCol: activeCoord.col,
+          endRow: activeCoord.row,
+        });
+        onApplyFormatPainter?.(targetRange);
+      }
+    }
+    if (isDraggingCells) {
+      setIsDraggingCells(false);
+      const dCol = dragDelta.col;
+      const dRow = dragDelta.row;
+      setDragDelta({ col: 0, row: 0 });
+      setDragOrigin(null);
+
+      if (dCol !== 0 || dRow !== 0) {
+        const targetMinCol = minColIdx + dCol;
+        const targetMaxCol = maxColIdx + dCol;
+        const targetMinRow = minRow + dRow;
+        const targetMaxRow = maxRow + dRow;
+
+        const targetRange: SelectionRange = {
+          startCol: colIndexToLetter(targetMinCol),
+          startRow: targetMinRow,
+          endCol: colIndexToLetter(targetMaxCol),
+          endRow: targetMaxRow,
+        };
+
+        const sourceRange: SelectionRange = {
+          startCol: colIndexToLetter(minColIdx),
+          startRow: minRow,
+          endCol: colIndexToLetter(maxColIdx),
+          endRow: maxRow,
+        };
+
+        const newActiveCellId = `${colIndexToLetter(activeColIdx + dCol)}${activeCoord.row + dRow}`;
+
+        // Check if destination cells contain data
+        let hasExistingData = false;
+        let overwrittenCount = 0;
+
+        for (let r = targetMinRow; r <= targetMaxRow; r++) {
+          for (let c = targetMinCol; c <= targetMaxCol; c++) {
+            const destId = `${colIndexToLetter(c)}${r}`;
+            const cell = sheet.cells[destId];
+            if (cell && cell.raw !== undefined && cell.raw !== null && cell.raw.trim() !== '') {
+              hasExistingData = true;
+              overwrittenCount++;
+            }
+          }
+        }
+
+        if (hasExistingData) {
+          setMoveConfirmation({
+            sourceRange,
+            targetRange,
+            newActiveCellId,
+            overwrittenCount,
+          });
+        } else {
+          onMoveCells?.(sourceRange, targetRange, newActiveCellId);
+        }
+      }
     }
     if (isDraggingFillHandle && fillTargetCell) {
       setIsDraggingFillHandle(false);
@@ -396,34 +1146,57 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       setIsDraggingFillHandle(false);
       setFillTargetCell(null);
     }
-  }, [isSelecting, isDraggingFillHandle, fillTargetCell, selectionRange, activeCoord, onAutoFill]);
+  }, [
+    isPointingFormula,
+    isSelectingCols,
+    isSelectingRows,
+    isSelecting,
+    isDraggingCells,
+    dragDelta,
+    minColIdx,
+    maxColIdx,
+    minRow,
+    maxRow,
+    activeColIdx,
+    activeCoord,
+    sheet.cells,
+    onMoveCells,
+    isDraggingFillHandle,
+    fillTargetCell,
+    selectionRange,
+    onAutoFill,
+    isFormatPainterActive,
+    onApplyFormatPainter,
+  ]);
 
   useEffect(() => {
     window.addEventListener('mouseup', handleGlobalMouseUp);
     return () => window.removeEventListener('mouseup', handleGlobalMouseUp);
   }, [handleGlobalMouseUp]);
 
-  // Calculate regular selection bounds
-  const getSelectionBounds = useCallback(() => {
-    const range = selectionRange || {
-      startCol: activeCoord.col,
-      startRow: activeCoord.row,
-      endCol: activeCoord.col,
-      endRow: activeCoord.row,
-    };
+  // Calculate formula pointed bounds
+  const getFormulaPointedBounds = useCallback(() => {
+    if (!formulaPointedRange) return null;
+    const c1 = letterToColIndex(formulaPointedRange.startCol);
+    const c2 = letterToColIndex(formulaPointedRange.endCol);
+    const minCol = Math.min(c1, c2);
+    const maxCol = Math.max(c1, c2);
+    const minRow = Math.min(formulaPointedRange.startRow, formulaPointedRange.endRow);
+    const maxRow = Math.max(formulaPointedRange.startRow, formulaPointedRange.endRow);
+    return { minCol, maxCol, minRow, maxRow };
+  }, [formulaPointedRange]);
 
-    const c1 = letterToColIndex(range.startCol);
-    const c2 = letterToColIndex(range.endCol);
-    const minColIdx = Math.min(c1, c2);
-    const maxColIdx = Math.max(c1, c2);
+  const formulaBounds = getFormulaPointedBounds();
 
-    const minRow = Math.min(range.startRow, range.endRow);
-    const maxRow = Math.max(range.startRow, range.endRow);
-
-    return { minColIdx, maxColIdx, minRow, maxRow };
-  }, [selectionRange, activeCoord]);
-
-  const { minColIdx, maxColIdx, minRow, maxRow } = getSelectionBounds();
+  const isCellInFormulaPoint = (colIdx: number, row: number) => {
+    if (!formulaBounds) return false;
+    return (
+      colIdx >= formulaBounds.minCol &&
+      colIdx <= formulaBounds.maxCol &&
+      row >= formulaBounds.minRow &&
+      row <= formulaBounds.maxRow
+    );
+  };
 
   // Calculate Autofill dragging bounds (for real Excel dashed marquee preview)
   const getFillBounds = useCallback(() => {
@@ -486,41 +1259,95 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       onKeyDown={handleKeyDown}
       className={`relative flex-1 overflow-auto select-none outline-none excel-grid transition-colors ${
         isDarkMode ? 'bg-[#181818] text-neutral-200' : 'bg-white text-neutral-900'
-      }`}
+      } ${isFormatPainterActive ? 'cursor-copy' : ''} ${isDraggingCells ? 'cursor-move' : ''}`}
       style={{
         transform: `scale(${zoomLevel / 100})`,
         transformOrigin: 'top left',
       }}
     >
+      {/* Drag & Move Cells Preview Banner */}
+      {isDraggingCells && (dragDelta.col !== 0 || dragDelta.row !== 0) && (
+        <div className="sticky top-2 left-1/2 -translate-x-1/2 z-40 w-fit mx-auto my-1 px-3.5 py-1.5 bg-[#107c41] text-white font-semibold text-xs rounded-full shadow-2xl border border-emerald-300/40 flex items-center gap-2 select-none pointer-events-none animate-in fade-in duration-100">
+          <Move size={14} className="text-white animate-pulse" />
+          <span>
+            Przenieś do: <strong>{colIndexToLetter(minColIdx + dragDelta.col)}{minRow + dragDelta.row}</strong>
+            {minColIdx !== maxColIdx || minRow !== maxRow
+              ? `:${colIndexToLetter(maxColIdx + dragDelta.col)}${maxRow + dragDelta.row}`
+              : ''}
+          </span>
+          <span className="text-[10px] text-emerald-100 font-normal">
+            (Upuść, aby przenieść • Esc: anuluj)
+          </span>
+        </div>
+      )}
+
+      {/* Format Painter Active Status Banner */}
+      {isFormatPainterActive && (
+        <div className="sticky top-2 left-1/2 -translate-x-1/2 z-40 w-fit mx-auto my-1 px-3 py-1 bg-amber-500 text-neutral-900 font-semibold text-xs rounded-full shadow-xl border border-amber-300 flex items-center gap-2 select-none pointer-events-none">
+          <Paintbrush size={14} className="text-neutral-900 animate-pulse" />
+          <span>Malarz formatów: Kliknij lub zaznacz komórkę, kolumnę lub wiersz, aby wkleić styl</span>
+          {isFormatPainterLocked && (
+            <span className="bg-neutral-900 text-amber-300 px-1.5 py-0.5 rounded text-[10px] uppercase font-bold">
+              Tryb ciągły (PIN)
+            </span>
+          )}
+          <span className="text-[10px] text-neutral-800 font-normal">(Esc: anuluj)</span>
+        </div>
+      )}
+
       <table className="border-collapse table-fixed w-max">
         {/* Table Header: Column letters */}
         {showHeaders && (
           <thead>
             <tr className="sticky top-0 z-20 shadow-xs">
-              {/* Corner Cell */}
-              <th className={`w-10 h-6 border-b border-r text-center font-normal text-[11px] ${
-                isDarkMode ? 'bg-[#2b2b2b] border-[#404040] text-neutral-400' : 'bg-[#f3f4f6] border-[#d1d5db] text-neutral-500'
-              }`}>
+              {/* Corner Cell (Select All) */}
+              <th
+                onClick={handleSelectAll}
+                className={`w-10 h-6 border-b border-r text-center font-normal text-[11px] cursor-pointer transition-colors ${
+                  isEntireSheetSelected
+                    ? 'bg-[#107c41] text-white font-bold'
+                    : isDarkMode
+                    ? 'bg-[#2b2b2b] border-[#404040] text-neutral-400 hover:bg-[#383838]'
+                    : 'bg-[#f3f4f6] border-[#d1d5db] text-neutral-500 hover:bg-[#e2e8f0]'
+                }`}
+                title="Zaznacz wszystkie komórki w arkuszu (Ctrl+A)"
+              >
                 ◢
               </th>
               {Array.from({ length: DEFAULT_COLS }).map((_, cIdx) => {
                 const colLetter = colIndexToLetter(cIdx);
-                const isColActive = cIdx >= minColIdx && cIdx <= maxColIdx;
+                const isColActive =
+                  cIdx >= minColIdx &&
+                  cIdx <= maxColIdx &&
+                  (!isEntireRowSelected || isEntireSheetSelected);
                 const width = getColWidth(colLetter);
 
                 return (
                   <th
                     key={colLetter}
+                    onMouseDown={(e) => handleColHeaderMouseDown(colLetter, cIdx, e)}
+                    onMouseEnter={() => handleColHeaderMouseEnter(colLetter)}
+                    onContextMenu={(e) => handleColContextMenu(colLetter, e)}
                     style={{ width, minWidth: width, maxWidth: width }}
-                    className={`h-6 border-b border-r text-center font-medium text-[11px] px-1 select-none font-mono ${
+                    className={`relative h-6 border-b border-r text-center font-medium text-[11px] px-1 select-none font-mono cursor-pointer transition-colors ${
                       isColActive
                         ? 'bg-[#107c41] text-white font-bold'
                         : isDarkMode
-                        ? 'bg-[#2b2b2b] border-[#404040] text-neutral-400 hover:bg-[#333333]'
-                        : 'bg-[#f3f4f6] border-[#d1d5db] text-neutral-700 hover:bg-[#e5e7eb]'
+                        ? 'bg-[#2b2b2b] border-[#404040] text-neutral-400 hover:bg-[#383838]'
+                        : 'bg-[#f3f4f6] border-[#d1d5db] text-neutral-700 hover:bg-[#e2e8f0]'
                     }`}
+                    title={`Zaznacz całą kolumnę ${colLetter} (kliknij i przeciągnij)`}
                   >
-                    {colLetter}
+                    <span>{colLetter}</span>
+                    {/* Column resize boundary handle */}
+                    <div
+                      onMouseDown={(e) => handleColResizeStart(colLetter, e)}
+                      onDoubleClick={(e) => handleColAutoFit(colLetter, e)}
+                      className="absolute top-0 -right-1 bottom-0 w-2.5 cursor-col-resize z-30 group/colres"
+                      title={`Przeciągnij granicę, aby zmienić szerokość kolumny ${colLetter} (podwójny klik: dopasuj)`}
+                    >
+                      <div className="w-[2px] h-full mx-auto opacity-0 group-hover/colres:opacity-100 bg-[#107c41] transition-opacity" />
+                    </div>
                   </th>
                 );
               })}
@@ -532,7 +1359,10 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         <tbody>
           {Array.from({ length: DEFAULT_ROWS }).map((_, rIdx) => {
             const rowNumber = rIdx + 1;
-            const isRowActive = rowNumber >= minRow && rowNumber <= maxRow;
+            const isRowActive =
+              rowNumber >= minRow &&
+              rowNumber <= maxRow &&
+              (!isEntireColSelected || isEntireSheetSelected);
             const rowHeight = getRowHeight(rowNumber);
 
             return (
@@ -540,15 +1370,28 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 {/* Row Number Header */}
                 {showHeaders && (
                   <td
-                    className={`sticky left-0 z-10 w-10 border-b border-r text-center font-mono text-[11px] select-none ${
+                    onMouseDown={(e) => handleRowHeaderMouseDown(rowNumber, e)}
+                    onMouseEnter={() => handleRowHeaderMouseEnter(rowNumber)}
+                    onContextMenu={(e) => handleRowContextMenu(rowNumber, e)}
+                    className={`sticky left-0 z-10 w-10 border-b border-r text-center font-mono text-[11px] select-none relative cursor-pointer transition-colors ${
                       isRowActive
                         ? 'bg-[#107c41] text-white font-bold'
                         : isDarkMode
-                        ? 'bg-[#2b2b2b] border-[#404040] text-neutral-400 hover:bg-[#333333]'
-                        : 'bg-[#f3f4f6] border-[#d1d5db] text-neutral-600 hover:bg-[#e5e7eb]'
+                        ? 'bg-[#2b2b2b] border-[#404040] text-neutral-400 hover:bg-[#383838]'
+                        : 'bg-[#f3f4f6] border-[#d1d5db] text-neutral-600 hover:bg-[#e2e8f0]'
                     }`}
+                    title={`Zaznacz cały wiersz ${rowNumber} (kliknij i przeciągnij)`}
                   >
-                    {rowNumber}
+                    <span>{rowNumber}</span>
+                    {/* Row resize boundary handle */}
+                    <div
+                      onMouseDown={(e) => handleRowResizeStart(rowNumber, e)}
+                      onDoubleClick={(e) => handleRowResetHeight(rowNumber, e)}
+                      className="absolute left-0 right-0 -bottom-1 h-2.5 cursor-row-resize z-30 group/rowres"
+                      title={`Przeciągnij granicę, aby zmienić wysokość wiersza ${rowNumber} (podwójny klik: standardowa)`}
+                    >
+                      <div className="h-[2px] w-full my-auto opacity-0 group-hover/rowres:opacity-100 bg-[#107c41] transition-opacity" />
+                    </div>
                   </td>
                 )}
 
@@ -560,6 +1403,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                   const selected = isCellSelected(cIdx, rowNumber);
                   const active = isCellActive(cIdx, rowNumber);
                   const inFillArea = isCellInFillArea(cIdx, rowNumber);
+                  const inFormulaPoint = isCellInFormulaPoint(cIdx, rowNumber);
                   const isTargetLesson = targetLessonCell === cellId;
 
                   // Formatting
@@ -572,6 +1416,48 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
                   // Is bottom-right corner of selection (for fill handle)
                   const isBottomRightCorner = cIdx === maxColIdx && rowNumber === maxRow;
+
+                  // Selection perimeter edges
+                  const isSelTopEdge = selected && rowNumber === minRow && !isEntireSheetSelected;
+                  const isSelBottomEdge = selected && rowNumber === maxRow && !isEntireSheetSelected;
+                  const isSelLeftEdge = selected && cIdx === minColIdx && !isEntireSheetSelected;
+                  const isSelRightEdge = selected && cIdx === maxColIdx && !isEntireSheetSelected;
+
+                  // Authentic Excel outer selection border
+                  let selectionEdgeClasses = '';
+                  if (selected && !inFillArea && !inFormulaPoint && !isEntireSheetSelected) {
+                    if (isSelTopEdge) selectionEdgeClasses += ' border-t-2 border-t-[#107c41]';
+                    if (isSelBottomEdge) selectionEdgeClasses += ' border-b-2 border-b-[#107c41]';
+                    if (isSelLeftEdge) selectionEdgeClasses += ' border-l-2 border-l-[#107c41]';
+                    if (isSelRightEdge) selectionEdgeClasses += ' border-r-2 border-r-[#107c41]';
+                  }
+
+                  // Drag & Move Destination preview bounds
+                  const targetMinCol = minColIdx + dragDelta.col;
+                  const targetMaxCol = maxColIdx + dragDelta.col;
+                  const targetMinRow = minRow + dragDelta.row;
+                  const targetMaxRow = maxRow + dragDelta.row;
+
+                  const isInMoveTarget =
+                    isDraggingCells &&
+                    (dragDelta.col !== 0 || dragDelta.row !== 0) &&
+                    cIdx >= targetMinCol &&
+                    cIdx <= targetMaxCol &&
+                    rowNumber >= targetMinRow &&
+                    rowNumber <= targetMaxRow;
+
+                  const isMoveTargetTop = isInMoveTarget && rowNumber === targetMinRow;
+                  const isMoveTargetBottom = isInMoveTarget && rowNumber === targetMaxRow;
+                  const isMoveTargetLeft = isInMoveTarget && cIdx === targetMinCol;
+                  const isMoveTargetRight = isInMoveTarget && cIdx === targetMaxCol;
+
+                  let moveTargetClasses = '';
+                  if (isInMoveTarget) {
+                    if (isMoveTargetTop) moveTargetClasses += ' border-t-2 border-t-[#107c41] border-dashed';
+                    if (isMoveTargetBottom) moveTargetClasses += ' border-b-2 border-b-[#107c41] border-dashed';
+                    if (isMoveTargetLeft) moveTargetClasses += ' border-l-2 border-l-[#107c41] border-dashed';
+                    if (isMoveTargetRight) moveTargetClasses += ' border-r-2 border-r-[#107c41] border-dashed';
+                  }
 
                   // Authentic Excel Autofill Marquee Edges
                   let fillEdgeClasses = '';
@@ -597,8 +1483,12 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                       onDoubleClick={() => startEditing()}
                       style={{
                         width: getColWidth(colLetter),
-                        backgroundColor: inFillArea
+                        backgroundColor: inFormulaPoint
+                          ? 'rgba(15, 108, 189, 0.12)'
+                          : inFillArea
                           ? 'rgba(16, 124, 65, 0.16)'
+                          : isInMoveTarget
+                          ? 'rgba(16, 124, 65, 0.22)'
                           : style.bgColor
                           ? style.bgColor
                           : selected
@@ -612,35 +1502,130 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                         fontSize: style.fontSize ? `${style.fontSize}px` : undefined,
                       }}
                       className={`relative px-1.5 py-0.5 text-xs truncate select-none tabular-numbers transition-colors ${
-                        showGridlines && !inFillArea
+                        showGridlines && !inFillArea && !inFormulaPoint
                           ? isDarkMode
                             ? 'border-b border-r border-[#303030]'
                             : 'border-b border-r border-[#e0e0e0]'
                           : ''
                       } ${
-                        active && !inFillArea
+                        inFormulaPoint
+                          ? 'excel-marching-ants ring-2 ring-[#0f6cbd] z-15'
+                          : active && !inFillArea && (!selectionRange || (minColIdx === maxColIdx && minRow === maxRow))
                           ? 'outline-2 outline-[#107c41] outline-offset-[-2px] z-10 bg-white dark:bg-[#222222]'
                           : selected && !inFillArea
                           ? 'bg-[#107c41]/10'
                           : ''
-                      } ${fillEdgeClasses} ${getBorderStyle(style)} ${
+                      } ${selectionEdgeClasses} ${moveTargetClasses} ${fillEdgeClasses} ${getBorderStyle(style)} ${
                         isTargetLesson ? 'pulse-target ring-2 ring-[#107c41] ring-inset' : ''
-                      }`}
+                      } ${isDraggingCells && selected ? 'opacity-65' : ''}`}
                     >
+                      {/* Edge handles for Drag to Move (Excel 4-way arrow move cursor) */}
+                      {!isEditing && !isDraggingFillHandle && !isEntireSheetSelected && selected && (
+                        <>
+                          {isSelTopEdge && (
+                            <div
+                              onMouseDown={(e) => handleDragBorderStart(e, cIdx, rowNumber)}
+                              className="absolute -top-1 left-0 right-0 h-2 cursor-move z-25 group/topedge"
+                              title="Przeciągnij krawędź zaznaczenia, aby przenieść komórki"
+                            >
+                              <div className="w-full h-full bg-[#107c41] opacity-0 group-hover/topedge:opacity-40 transition-opacity" />
+                            </div>
+                          )}
+                          {isSelBottomEdge && (
+                            <div
+                              onMouseDown={(e) => handleDragBorderStart(e, cIdx, rowNumber)}
+                              className={`absolute -bottom-1 left-0 ${isBottomRightCorner ? 'right-3' : 'right-0'} h-2 cursor-move z-25 group/botedge`}
+                              title="Przeciągnij krawędź zaznaczenia, aby przenieść komórki"
+                            >
+                              <div className="w-full h-full bg-[#107c41] opacity-0 group-hover/botedge:opacity-40 transition-opacity" />
+                            </div>
+                          )}
+                          {isSelLeftEdge && (
+                            <div
+                              onMouseDown={(e) => handleDragBorderStart(e, cIdx, rowNumber)}
+                              className="absolute top-0 bottom-0 -left-1 w-2 cursor-move z-25 group/leftedge"
+                              title="Przeciągnij krawędź zaznaczenia, aby przenieść komórki"
+                            >
+                              <div className="w-full h-full bg-[#107c41] opacity-0 group-hover/leftedge:opacity-40 transition-opacity" />
+                            </div>
+                          )}
+                          {isSelRightEdge && (
+                            <div
+                              onMouseDown={(e) => handleDragBorderStart(e, cIdx, rowNumber)}
+                              className={`absolute top-0 ${isBottomRightCorner ? 'bottom-3' : 'bottom-0'} -right-1 w-2 cursor-move z-25 group/rightedge`}
+                              title="Przeciągnij krawędź zaznaczenia, aby przenieść komórki"
+                            >
+                              <div className="w-full h-full bg-[#107c41] opacity-0 group-hover/rightedge:opacity-40 transition-opacity" />
+                            </div>
+                          )}
+                        </>
+                      )}
+
                       {/* In-place Editing Input */}
                       {active && isEditing ? (
                         <input
                           ref={editInputRef}
                           type="text"
+                          data-formula-input="true"
                           value={editValue}
-                          onChange={(e) => setEditValue(e.target.value)}
-                          onBlur={commitEdit}
+                          onChange={(e) => {
+                            setEditValue(e.target.value);
+                            onCellTyping?.(e.target.value);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (editValue.startsWith('=')) {
+                                setIsEditing(false);
+                                onSubmitFormula?.(false);
+                              } else {
+                                commitEdit();
+                                const nextCell = `${activeCoord.col}${activeCoord.row + 1}`;
+                                onSelectCell(nextCell);
+                              }
+                            } else if (e.key === 'Tab') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (editValue.startsWith('=')) {
+                                setIsEditing(false);
+                                onSubmitFormula?.(true);
+                              } else {
+                                commitEdit();
+                                const nextCol = colIndexToLetter(activeColIdx + 1);
+                                onSelectCell(`${nextCol}${activeCoord.row}`);
+                              }
+                            } else if (e.key === 'Escape') {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              if (editValue.startsWith('=')) {
+                                setIsEditing(false);
+                                onCancelFormula?.();
+                              } else {
+                                cancelEdit();
+                              }
+                            }
+                          }}
+                          onBlur={() => {
+                            if (!isPointingFormula && !isFormulaMode) {
+                              commitEdit();
+                            }
+                          }}
                           className={`absolute inset-0 w-full h-full px-1.5 text-xs font-mono outline-none border-2 border-[#107c41] z-30 ${
                             isDarkMode ? 'bg-[#1e1e1e] text-white' : 'bg-white text-black'
                           }`}
                         />
                       ) : (
                         <span>{displayValue}</span>
+                      )}
+
+                      {/* Formula Point Reference Badge */}
+                      {inFormulaPoint && formulaBounds && cIdx === formulaBounds.minCol && rowNumber === formulaBounds.minRow && (
+                        <span className="absolute -top-3.5 right-1 z-30 px-1 py-0.2 bg-[#0f6cbd] text-white text-[9px] font-mono font-bold rounded shadow-xs pointer-events-none">
+                          {formulaBounds.minCol === formulaBounds.maxCol && formulaBounds.minRow === formulaBounds.maxRow
+                            ? cellId
+                            : `${colIndexToLetter(formulaBounds.minCol)}${formulaBounds.minRow}:${colIndexToLetter(formulaBounds.maxCol)}${formulaBounds.maxRow}`}
+                        </span>
                       )}
 
                       {/* Lesson Target Floating Pill */}
@@ -651,7 +1636,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                       )}
 
                       {/* Fill Handle (Excel autofill small square at bottom-right of selection) */}
-                      {isBottomRightCorner && !isEditing && !isDraggingFillHandle && (
+                      {isBottomRightCorner && !isEditing && !isDraggingFillHandle && !isDraggingCells && (
                         <div
                           onMouseDown={(e) => {
                             e.stopPropagation();
@@ -659,7 +1644,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                             setFillTargetCell(cellId);
                           }}
                           title="Przeciągnij, aby automatycznie wypełnić lub skopiować formułę"
-                          className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-[#107c41] border border-white dark:border-black excel-fill-handle z-20 shadow-xs hover:scale-125 transition-transform"
+                          className="absolute -bottom-1 -right-1 w-2.5 h-2.5 bg-[#107c41] border border-white dark:border-black excel-fill-handle z-30 shadow-xs hover:scale-125 transition-transform cursor-crosshair"
                         />
                       )}
                     </td>
@@ -716,10 +1701,20 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                 onApplyStyle?.({ bgColor: '#fef3c7' });
                 setContextMenu(null);
               }}
-              title="Żółte wypełnienie"
+              title="Żółte wypełnienie tła"
               className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded text-amber-500"
             >
               <PaintBucket size={13} />
+            </button>
+            <button
+              onClick={() => {
+                onApplyStyle?.({ textColor: '#dc2626' });
+                setContextMenu(null);
+              }}
+              title="Czerwony kolor tekstu"
+              className="p-1 hover:bg-neutral-200 dark:hover:bg-neutral-700 rounded text-rose-600 font-serif font-bold text-xs leading-none flex items-center justify-center w-5"
+            >
+              A
             </button>
             <button
               onClick={() => {
@@ -746,13 +1741,17 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
           {/* Standard Office Context Menu Items */}
           <button
             onClick={() => {
-              const cell = sheet.cells[contextMenu.cellId];
-              if (cell) {
-                setClipboardData({ raw: cell.raw, style: cell.style, isCut: true, sourceCellId: contextMenu.cellId });
+              if (onCut) {
+                onCut();
+              } else {
+                const cell = sheet.cells[contextMenu.cellId];
+                if (cell) {
+                  setClipboardData({ raw: cell.raw, style: cell.style, isCut: true, sourceCellId: contextMenu.cellId });
+                }
               }
               setContextMenu(null);
             }}
-            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors"
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2">
               <Scissors size={14} className="text-neutral-500" />
@@ -763,13 +1762,17 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
           <button
             onClick={() => {
-              const cell = sheet.cells[contextMenu.cellId];
-              if (cell) {
-                setClipboardData({ raw: cell.raw, style: cell.style });
+              if (onCopy) {
+                onCopy();
+              } else {
+                const cell = sheet.cells[contextMenu.cellId];
+                if (cell) {
+                  setClipboardData({ raw: cell.raw, style: cell.style });
+                }
               }
               setContextMenu(null);
             }}
-            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors"
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2">
               <Copy size={14} className="text-neutral-500" />
@@ -778,9 +1781,26 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             <kbd className="text-[10px] text-neutral-400 font-mono">Ctrl+C</kbd>
           </button>
 
+          {/* Malarz formatów in Context Menu */}
           <button
             onClick={() => {
-              if (clipboardData) {
+              onToggleFormatPainter?.(false);
+              setContextMenu(null);
+            }}
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2">
+              <Paintbrush size={14} className="text-amber-500" />
+              <span>Malarz formatów</span>
+            </div>
+            <kbd className="text-[10px] text-neutral-400 font-mono">Ctrl+Shift+C</kbd>
+          </button>
+
+          <button
+            onClick={() => {
+              if (onPaste) {
+                onPaste();
+              } else if (clipboardData) {
                 onCellChange(contextMenu.cellId, clipboardData.raw);
                 if (clipboardData.isCut && clipboardData.sourceCellId) {
                   onCellChange(clipboardData.sourceCellId, '');
@@ -789,16 +1809,11 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               }
               setContextMenu(null);
             }}
-            disabled={!clipboardData}
-            className={`w-full flex items-center justify-between px-3 py-1.5 text-left transition-colors ${
-              clipboardData
-                ? 'hover:bg-neutral-100 dark:hover:bg-[#383838]'
-                : 'opacity-40 cursor-not-allowed'
-            }`}
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2">
               <Clipboard size={14} className="text-neutral-500" />
-              <span>Wklej wszystko</span>
+              <span>Wklej</span>
             </div>
             <kbd className="text-[10px] text-neutral-400 font-mono">Ctrl+V</kbd>
           </button>
@@ -810,7 +1825,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               onInsertRow?.();
               setContextMenu(null);
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors cursor-pointer"
           >
             <Plus size={14} className="text-[#107c41]" />
             <span>Wstaw wiersz</span>
@@ -821,7 +1836,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               onDeleteRow?.();
               setContextMenu(null);
             }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left text-rose-600 dark:text-rose-400 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left text-rose-600 dark:text-rose-400 transition-colors cursor-pointer"
           >
             <Trash2 size={14} />
             <span>Usuń ten wiersz</span>
@@ -829,10 +1844,14 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
           <button
             onClick={() => {
-              onCellChange(contextMenu.cellId, '');
+              if (onClearSelection) {
+                onClearSelection();
+              } else {
+                onCellChange(contextMenu.cellId, '');
+              }
               setContextMenu(null);
             }}
-            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors"
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-neutral-100 dark:hover:bg-[#383838] text-left transition-colors cursor-pointer"
           >
             <span>Wyczyść zawartość</span>
             <kbd className="text-[10px] text-neutral-400 font-mono">Delete</kbd>
@@ -861,6 +1880,107 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
             <BarChart2 size={14} className="text-[#0f6cbd]" />
             <span>Wstaw wykres z danych...</span>
           </button>
+        </div>
+      )}
+
+      {/* Floating live size indicator while resizing column */}
+      {resizingCol && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-neutral-900/90 text-white text-xs font-mono px-3.5 py-1.5 rounded-md shadow-2xl border border-neutral-700 pointer-events-none flex items-center gap-2 backdrop-blur-xs select-none">
+          <span>Kolumna <strong>{resizingCol.col}</strong></span>
+          <span className="text-neutral-500">|</span>
+          <span>Szerokość: <strong className="text-emerald-400">{resizingCol.currentWidth} px</strong></span>
+        </div>
+      )}
+
+      {/* Floating live size indicator while resizing row */}
+      {resizingRow && (
+        <div className="fixed top-24 left-1/2 -translate-x-1/2 z-50 bg-neutral-900/90 text-white text-xs font-mono px-3.5 py-1.5 rounded-md shadow-2xl border border-neutral-700 pointer-events-none flex items-center gap-2 backdrop-blur-xs select-none">
+          <span>Wiersz <strong>{resizingRow.row}</strong></span>
+          <span className="text-neutral-500">|</span>
+          <span>Wysokość: <strong className="text-emerald-400">{resizingRow.currentHeight} px</strong></span>
+        </div>
+      )}
+
+      {/* Authentic Microsoft Excel Move Cells Confirmation Dialog */}
+      {moveConfirmation && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs"
+          onClick={() => setMoveConfirmation(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-[420px] max-w-[92vw] bg-white dark:bg-[#2b2b2b] text-neutral-800 dark:text-neutral-100 rounded-lg shadow-2xl border border-neutral-300 dark:border-neutral-700 overflow-hidden animate-in fade-in zoom-in-95 duration-150 select-none"
+          >
+            {/* Title Bar */}
+            <div className="flex items-center justify-between px-3.5 py-2 bg-neutral-100 dark:bg-[#202020] border-b border-neutral-200 dark:border-neutral-700">
+              <div className="flex items-center gap-2">
+                <div className="w-4 h-4 bg-[#107c41] rounded-xs flex items-center justify-center text-white text-[10px] font-bold">
+                  X
+                </div>
+                <span className="font-semibold text-xs text-neutral-700 dark:text-neutral-200">
+                  Microsoft Excel
+                </span>
+              </div>
+              <button
+                onClick={() => setMoveConfirmation(null)}
+                className="text-neutral-500 hover:text-neutral-800 dark:hover:text-white p-0.5 rounded text-xs transition-colors cursor-pointer"
+                title="Zamknij"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Dialog Content */}
+            <div className="p-5 flex items-start gap-4">
+              <div className="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                <AlertTriangle size={22} />
+              </div>
+              <div>
+                <p className="text-sm font-semibold leading-snug">
+                  W tym miejscu znajdują się już dane. Czy chcesz je zamienić?
+                </p>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-2 font-mono">
+                  Docelowy zakres:{' '}
+                  <span className="font-bold text-neutral-700 dark:text-neutral-200">
+                    {moveConfirmation.targetRange.startCol}{moveConfirmation.targetRange.startRow}
+                    {moveConfirmation.targetRange.startCol !== moveConfirmation.targetRange.endCol ||
+                    moveConfirmation.targetRange.startRow !== moveConfirmation.targetRange.endRow
+                      ? `:${moveConfirmation.targetRange.endCol}${moveConfirmation.targetRange.endRow}`
+                      : ''}
+                  </span>{' '}
+                  ({moveConfirmation.overwrittenCount}{' '}
+                  {moveConfirmation.overwrittenCount === 1 ? 'komórka z danymi' : 'komórki z danymi'})
+                </p>
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex items-center justify-end gap-2.5 px-4 py-3 bg-neutral-50 dark:bg-[#242424] border-t border-neutral-200 dark:border-neutral-700">
+              <button
+                autoFocus
+                onClick={() => {
+                  onMoveCells?.(
+                    moveConfirmation.sourceRange,
+                    moveConfirmation.targetRange,
+                    moveConfirmation.newActiveCellId
+                  );
+                  setMoveConfirmation(null);
+                }}
+                className="px-4 py-1.5 bg-[#107c41] hover:bg-[#0d6535] text-white text-xs font-semibold rounded shadow-xs transition-colors cursor-pointer"
+              >
+                OK
+              </button>
+              <button
+                onClick={() => {
+                  setMoveConfirmation(null);
+                  sounds.playCellClick();
+                }}
+                className="px-4 py-1.5 bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 text-neutral-800 dark:text-neutral-200 text-xs font-medium rounded transition-colors cursor-pointer"
+              >
+                Anuluj
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

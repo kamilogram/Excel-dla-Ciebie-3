@@ -11,6 +11,7 @@ interface FormulaBarProps {
   onJumpToCell: (cellId: string) => void;
   onOpenFunctionsMenu: () => void;
   isDarkMode: boolean;
+  isFormulaMode?: boolean;
 }
 
 const COMMON_FUNCTIONS = [
@@ -36,6 +37,7 @@ export const FormulaBar: React.FC<FormulaBarProps> = ({
   onJumpToCell,
   onOpenFunctionsMenu,
   isDarkMode,
+  isFormulaMode = false,
 }) => {
   const [addressInput, setAddressInput] = useState(activeCellId);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -46,23 +48,32 @@ export const FormulaBar: React.FC<FormulaBarProps> = ({
     setAddressInput(selectionRangeText || activeCellId);
   }, [activeCellId, selectionRangeText]);
 
+  // Helper to normalize Polish diacritics for search
+  const normalizeDiacritics = (str: string) =>
+    str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/ł/g, 'l').replace(/Ł/g, 'L');
+
   // Determine formula hints
   const isTypingFormula = currentValue.startsWith('=');
   const formulaKeyword = isTypingFormula ? currentValue.slice(1).toUpperCase() : '';
+  const normalizedKeyword = normalizeDiacritics(formulaKeyword);
   const matchedFunctions = isTypingFormula && formulaKeyword.length > 0 && !formulaKeyword.includes('(')
-    ? COMMON_FUNCTIONS.filter((fn) => fn.name.startsWith(formulaKeyword))
+    ? COMMON_FUNCTIONS.filter(
+        (fn) => fn.name.startsWith(formulaKeyword) || normalizeDiacritics(fn.name).startsWith(normalizedKeyword)
+      )
     : [];
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      e.preventDefault();
       if (showSuggestions && matchedFunctions[activeSuggestionIndex]) {
-        e.preventDefault();
         onValueChange(`=${matchedFunctions[activeSuggestionIndex].name}(`);
         setShowSuggestions(false);
       } else {
+        setShowSuggestions(false);
         onSubmit();
       }
     } else if (e.key === 'Escape') {
+      e.preventDefault();
       setShowSuggestions(false);
       onCancel();
     } else if (e.key === 'ArrowDown' && showSuggestions && matchedFunctions.length > 0) {
@@ -88,7 +99,7 @@ export const FormulaBar: React.FC<FormulaBarProps> = ({
   };
 
   return (
-    <div className={`relative flex items-center px-2 py-1 gap-1 border-b text-xs select-none transition-colors ${
+    <div className={`relative z-10 flex items-center px-2 py-1 gap-1 border-b text-xs select-none transition-colors ${
       isDarkMode ? 'bg-[#252525] border-[#383838] text-neutral-200' : 'bg-white border-[#e5e7eb] text-neutral-800'
     }`}>
       {/* Name Box (Pole Nazwy) */}
@@ -137,6 +148,7 @@ export const FormulaBar: React.FC<FormulaBarProps> = ({
         <input
           ref={inputRef}
           type="text"
+          data-formula-input="true"
           value={currentValue}
           onChange={(e) => {
             onValueChange(e.target.value);
@@ -145,11 +157,21 @@ export const FormulaBar: React.FC<FormulaBarProps> = ({
           onKeyDown={handleKeyDown}
           placeholder="Wpisz wartość lub formułę (np. =SUMA(C3:C7), =JEŻELI(C3>5000; 500; 0))..."
           className={`w-full px-2.5 py-1 text-xs outline-none rounded font-mono ${
+            isFormulaMode ? 'pr-64' : ''
+          } ${
             isDarkMode
               ? 'bg-[#1e1e1e] text-neutral-100 placeholder-neutral-500 focus:ring-1 focus:ring-[#107c41]'
               : 'bg-white text-neutral-900 placeholder-neutral-400 focus:ring-1 focus:ring-[#107c41]'
           }`}
         />
+
+        {/* Formula Point Mode Badge */}
+        {isFormulaMode && (
+          <div className="absolute right-2 hidden sm:flex items-center gap-1.5 px-2 py-0.5 bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 text-[10px] font-semibold rounded border border-blue-200 dark:border-blue-800 pointer-events-none">
+            <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-ping" />
+            <span>Tryb formuły: wskaż komórkę [Enter: zatwierdź | Esc: wyjdź]</span>
+          </div>
+        )}
 
         {/* Function Autocomplete Suggestions Popup */}
         {showSuggestions && matchedFunctions.length > 0 && (

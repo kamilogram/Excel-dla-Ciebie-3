@@ -24,6 +24,7 @@ export type SheetData = {
   cells: Record<string, CellData>; // key: "A1", "B2", etc.
   colWidths: Record<string, number>; // key: "A", "B", etc.
   rowHeights: Record<number, number>; // key: 1, 2, etc.
+  isUserAdded?: boolean;
 };
 
 export type SelectionRange = {

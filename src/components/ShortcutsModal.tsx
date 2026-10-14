@@ -8,11 +8,15 @@ interface ShortcutsModalProps {
 }
 
 const SHORTCUTS_DATA = [
+  { key: 'Ctrl + A', desc: 'Zaznacz cały arkusz' },
   { key: 'Ctrl + B', desc: 'Pogrubienie tekstu w zaznaczonych komórkach' },
   { key: 'Ctrl + I', desc: 'Kursywa tekstu' },
   { key: 'Ctrl + U', desc: 'Podkreślenie tekstu' },
   { key: 'Ctrl + C', desc: 'Kopiowanie zaznaczenia do schowka' },
+  { key: 'Ctrl + X', desc: 'Wycięcie zaznaczenia' },
   { key: 'Ctrl + V', desc: 'Wklejanie ze schowka' },
+  { key: 'Ctrl + Shift + C', desc: 'Malarz formatów: Kopiuj formatowanie z aktywnej komórki' },
+  { key: 'Ctrl + Shift + V', desc: 'Malarz formatów: Wklej skopiowany format do zaznaczenia' },
   { key: 'Ctrl + Z', desc: 'Cofnij ostatnią operację (Undo)' },
   { key: 'Ctrl + Y', desc: 'Ponów operację (Redo)' },
   { key: 'F2', desc: 'Edycja aktywnej komórki w miejscu' },
@@ -20,8 +24,8 @@ const SHORTCUTS_DATA = [
   { key: 'Shift + Enter', desc: 'Zatwierdź i przejdź do komórki powyżej' },
   { key: 'Tab', desc: 'Zatwierdź i przejdź do komórki w prawo' },
   { key: 'Shift + Tab', desc: 'Zatwierdź i przejdź do komórki w lewo' },
-  { key: 'Escape', desc: 'Anuluj edycję formuły' },
-  { key: 'Delete / Backspace', desc: 'Wyczyść zawartość aktywnej komórki' },
+  { key: 'Escape', desc: 'Anuluj edycję formuły / wyłącz malarza formatów' },
+  { key: 'Delete / Backspace', desc: 'Wyczyść zawartość zaznaczonych komórek' },
   { key: 'Shift + Strzałki', desc: 'Rozszerz zaznaczenie zakresu komórek' },
 ];
 
