@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Bold,
   Italic,
@@ -33,6 +33,7 @@ import {
   parseCellAddress,
   formatCellValue,
 } from '../utils/formulaEngine';
+import { getCellBorderCss } from '../utils/borderUtils';
 import { sounds } from '../utils/audio';
 
 interface SpreadsheetGridProps {
@@ -42,7 +43,7 @@ interface SpreadsheetGridProps {
   onSelectCell: (cellId: string) => void;
   onSelectRange: (range: SelectionRange | null) => void;
   onCellChange: (cellId: string, rawValue: string) => void;
-  onAutoFill: (sourceRange: SelectionRange, targetRange: SelectionRange) => void;
+  onAutoFill: (sourceRange: SelectionRange, targetRange: SelectionRange, copyOnly?: boolean) => void;
   targetLessonCell?: string;
   showGridlines: boolean;
   showHeaders: boolean;
@@ -171,6 +172,8 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
   // Autofill Dragging States
   const [isDraggingFillHandle, setIsDraggingFillHandle] = useState(false);
   const [fillTargetCell, setFillTargetCell] = useState<string | null>(null);
+  const [isFillModifierActive, setIsFillModifierActive] = useState(false);
+  const [fillMousePos, setFillMousePos] = useState<{ x: number; y: number } | null>(null);
 
   // Right-Click Context Menu State
   const [contextMenu, setContextMenu] = useState<{
@@ -189,6 +192,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
+  const isNavigatingViaKeyRef = useRef(false);
 
   // Column and row sizes (responsive to active dragging)
   const getColWidth = useCallback(
@@ -268,7 +272,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     const handleMouseMove = (e: MouseEvent) => {
       const scale = zoomLevel / 100;
       const deltaX = (e.clientX - resizingCol.startX) / scale;
-      const newWidth = Math.max(30, Math.round(resizingCol.startWidth + deltaX));
+      const newWidth = Math.max(8, Math.round(resizingCol.startWidth + deltaX));
       setResizingCol((prev) => (prev ? { ...prev, currentWidth: newWidth } : null));
     };
 
@@ -404,7 +408,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       editInputRef.current.focus();
       editInputRef.current.select();
     }
-  }, [isEditing]);
+  }, [isEditing, activeCellId]);
 
   // Close context menu on outside click
   useEffect(() => {
@@ -415,9 +419,37 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     return () => window.removeEventListener('click', handleGlobalClick);
   }, []);
 
+  // Listen for Ctrl/Meta/Alt modifier key during autofill drag
+  useEffect(() => {
+    if (!isDraggingFillHandle) {
+      setIsFillModifierActive(false);
+      setFillMousePos(null);
+      return;
+    }
+
+    const handleKeyMod = (e: KeyboardEvent) => {
+      setIsFillModifierActive(e.ctrlKey || e.metaKey || e.altKey);
+    };
+
+    const handleMouseMove = (e: MouseEvent) => {
+      setIsFillModifierActive(e.ctrlKey || e.metaKey || e.altKey);
+      setFillMousePos({ x: e.clientX, y: e.clientY });
+    };
+
+    window.addEventListener('keydown', handleKeyMod);
+    window.addEventListener('keyup', handleKeyMod);
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => {
+      window.removeEventListener('keydown', handleKeyMod);
+      window.removeEventListener('keyup', handleKeyMod);
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, [isDraggingFillHandle]);
+
   // Enter edit mode
-  const startEditing = useCallback((initialVal?: string) => {
-    const currentRaw = sheet.cells[activeCellId]?.raw || '';
+  const startEditing = useCallback((initialVal?: string, cellIdToEdit?: string) => {
+    const targetCellId = cellIdToEdit || activeCellId;
+    const currentRaw = sheet.cells[targetCellId]?.raw || '';
     const newVal = initialVal !== undefined ? initialVal : currentRaw;
     setEditValue(newVal);
     setIsEditing(true);
@@ -443,27 +475,52 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     if (isEditing) {
       if (e.key === 'Enter') {
         e.preventDefault();
-        if (editValue.startsWith('=')) {
+        const valToSave = editValue;
+        const targetRow = e.shiftKey ? Math.max(1, activeCoord.row - 1) : activeCoord.row + 1;
+        const nextCell = `${activeCoord.col}${targetRow}`;
+        isNavigatingViaKeyRef.current = true;
+        if (valToSave.startsWith('=')) {
           setIsEditing(false);
           onSubmitFormula?.(false);
         } else {
-          commitEdit();
-          // Move down
-          const nextCell = `${activeCoord.col}${activeCoord.row + 1}`;
-          onSelectCell(nextCell);
+          onCellChange(activeCellId, valToSave);
         }
+        onSelectCell(nextCell);
+        const nextRaw = sheet.cells[nextCell]?.raw || '';
+        setEditValue(nextRaw);
+        setIsEditing(true);
+        setTimeout(() => {
+          isNavigatingViaKeyRef.current = false;
+          if (editInputRef.current) {
+            editInputRef.current.focus();
+            editInputRef.current.select();
+          }
+        }, 40);
         return;
       } else if (e.key === 'Tab') {
         e.preventDefault();
-        if (editValue.startsWith('=')) {
+        const valToSave = editValue;
+        const targetColIdx = e.shiftKey ? Math.max(0, activeColIdx - 1) : activeColIdx + 1;
+        const nextCol = colIndexToLetter(targetColIdx);
+        const nextCell = `${nextCol}${activeCoord.row}`;
+        isNavigatingViaKeyRef.current = true;
+        if (valToSave.startsWith('=')) {
           setIsEditing(false);
           onSubmitFormula?.(true);
         } else {
-          commitEdit();
-          // Move right
-          const nextCol = colIndexToLetter(activeColIdx + 1);
-          onSelectCell(`${nextCol}${activeCoord.row}`);
+          onCellChange(activeCellId, valToSave);
         }
+        onSelectCell(nextCell);
+        const nextRaw = sheet.cells[nextCell]?.raw || '';
+        setEditValue(nextRaw);
+        setIsEditing(true);
+        setTimeout(() => {
+          isNavigatingViaKeyRef.current = false;
+          if (editInputRef.current) {
+            editInputRef.current.focus();
+            editInputRef.current.select();
+          }
+        }, 40);
         return;
       } else if (e.key === 'Escape') {
         e.preventDefault();
@@ -1123,27 +1180,52 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
       }
     }
     if (isDraggingFillHandle && fillTargetCell) {
+      const copyOnly = isFillModifierActive;
       setIsDraggingFillHandle(false);
-      const sourceRange: SelectionRange = selectionRange || {
-        startCol: activeCoord.col,
-        startRow: activeCoord.row,
-        endCol: activeCoord.col,
-        endRow: activeCoord.row,
+      setIsFillModifierActive(false);
+      setFillMousePos(null);
+
+      const normalizedSourceRange: SelectionRange = {
+        startCol: colIndexToLetter(minColIdx),
+        startRow: minRow,
+        endCol: colIndexToLetter(maxColIdx),
+        endRow: maxRow,
       };
 
       const targetCoord = parseCellAddress(fillTargetCell);
       if (targetCoord) {
+        const targetColIdx = letterToColIndex(targetCoord.col);
+        const targetRow = targetCoord.row;
+
+        const dRow = targetRow > maxRow ? targetRow - maxRow : targetRow < minRow ? minRow - targetRow : 0;
+        const dCol = targetColIdx > maxColIdx ? targetColIdx - maxColIdx : targetColIdx < minColIdx ? minColIdx - targetColIdx : 0;
+
+        let fullMinCol = minColIdx;
+        let fullMaxCol = maxColIdx;
+        let fullMinRow = minRow;
+        let fullMaxRow = maxRow;
+
+        if (dRow >= dCol && dRow > 0) {
+          fullMinRow = Math.min(minRow, targetRow);
+          fullMaxRow = Math.max(maxRow, targetRow);
+        } else if (dCol > 0) {
+          fullMinCol = Math.min(minColIdx, targetColIdx);
+          fullMaxCol = Math.max(maxColIdx, targetColIdx);
+        }
+
         const fullRange: SelectionRange = {
-          startCol: sourceRange.startCol,
-          startRow: sourceRange.startRow,
-          endCol: targetCoord.col,
-          endRow: targetCoord.row,
+          startCol: colIndexToLetter(fullMinCol),
+          startRow: fullMinRow,
+          endCol: colIndexToLetter(fullMaxCol),
+          endRow: fullMaxRow,
         };
-        onAutoFill(sourceRange, fullRange);
+        onAutoFill(normalizedSourceRange, fullRange, copyOnly);
       }
       setFillTargetCell(null);
     } else if (isDraggingFillHandle) {
       setIsDraggingFillHandle(false);
+      setIsFillModifierActive(false);
+      setFillMousePos(null);
       setFillTargetCell(null);
     }
   }, [
@@ -1206,11 +1288,23 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     if (!targetCoord) return null;
 
     const targetColIdx = letterToColIndex(targetCoord.col);
+    const targetRow = targetCoord.row;
 
-    const fullMinCol = Math.min(minColIdx, targetColIdx);
-    const fullMaxCol = Math.max(maxColIdx, targetColIdx);
-    const fullMinRow = Math.min(minRow, targetCoord.row);
-    const fullMaxRow = Math.max(maxRow, targetCoord.row);
+    const dRow = targetRow > maxRow ? targetRow - maxRow : targetRow < minRow ? minRow - targetRow : 0;
+    const dCol = targetColIdx > maxColIdx ? targetColIdx - maxColIdx : targetColIdx < minColIdx ? minColIdx - targetColIdx : 0;
+
+    let fullMinCol = minColIdx;
+    let fullMaxCol = maxColIdx;
+    let fullMinRow = minRow;
+    let fullMaxRow = maxRow;
+
+    if (dRow >= dCol && dRow > 0) {
+      fullMinRow = Math.min(minRow, targetRow);
+      fullMaxRow = Math.max(maxRow, targetRow);
+    } else if (dCol > 0) {
+      fullMinCol = Math.min(minColIdx, targetColIdx);
+      fullMaxCol = Math.max(maxColIdx, targetColIdx);
+    }
 
     return { fullMinCol, fullMaxCol, fullMinRow, fullMaxRow };
   }, [isDraggingFillHandle, fillTargetCell, minColIdx, maxColIdx, minRow, maxRow]);
@@ -1237,6 +1331,17 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
     );
   };
 
+  // Helper to determine if a cell is in the extension area of autofill (excluding original source selection)
+  const isCellInFillExtension = (colIdx: number, row: number) => {
+    if (!fillBounds) return false;
+    const inArea =
+      colIdx >= fillBounds.fullMinCol &&
+      colIdx <= fillBounds.fullMaxCol &&
+      row >= fillBounds.fullMinRow &&
+      row <= fillBounds.fullMaxRow;
+    return inArea && !isCellSelected(colIdx, row);
+  };
+
   // Border styling helper
   const getBorderStyle = (style?: CellStyle) => {
     if (!style?.border) return '';
@@ -1251,6 +1356,15 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         return '';
     }
   };
+
+  // Total table width calculated strictly from all columns + header corner
+  const totalTableWidth = useMemo(() => {
+    let total = showHeaders ? 40 : 0;
+    for (let c = 0; c < DEFAULT_COLS; c++) {
+      total += getColWidth(colIndexToLetter(c));
+    }
+    return total;
+  }, [showHeaders, getColWidth]);
 
   return (
     <div
@@ -1295,7 +1409,24 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
         </div>
       )}
 
-      <table className="border-collapse table-fixed w-max">
+      <table
+        className="border-collapse select-none"
+        style={{
+          tableLayout: 'fixed',
+          width: totalTableWidth,
+          minWidth: totalTableWidth,
+        }}
+      >
+        {/* W3C Colgroup: Strictly enforces column widths on the entire table */}
+        <colgroup>
+          {showHeaders && <col style={{ width: 40 }} />}
+          {Array.from({ length: DEFAULT_COLS }).map((_, cIdx) => {
+            const colLetter = colIndexToLetter(cIdx);
+            const w = getColWidth(colLetter);
+            return <col key={colLetter} style={{ width: w }} />;
+          })}
+        </colgroup>
+
         {/* Table Header: Column letters */}
         {showHeaders && (
           <thead>
@@ -1328,7 +1459,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                     onMouseDown={(e) => handleColHeaderMouseDown(colLetter, cIdx, e)}
                     onMouseEnter={() => handleColHeaderMouseEnter(colLetter)}
                     onContextMenu={(e) => handleColContextMenu(colLetter, e)}
-                    style={{ width, minWidth: width, maxWidth: width }}
+                    style={{ width, minWidth: width, maxWidth: width, overflow: 'hidden', boxSizing: 'border-box' }}
                     className={`relative h-6 border-b border-r text-center font-medium text-[11px] px-1 select-none font-mono cursor-pointer transition-colors ${
                       isColActive
                         ? 'bg-[#107c41] text-white font-bold'
@@ -1346,7 +1477,15 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                       className="absolute top-0 -right-1 bottom-0 w-2.5 cursor-col-resize z-30 group/colres"
                       title={`Przeciągnij granicę, aby zmienić szerokość kolumny ${colLetter} (podwójny klik: dopasuj)`}
                     >
-                      <div className="w-[2px] h-full mx-auto opacity-0 group-hover/colres:opacity-100 bg-[#107c41] transition-opacity" />
+                      <div
+                        className={`w-[2px] h-full mx-auto bg-[#107c41] transition-opacity ${
+                          resizingCol?.col === colLetter ? 'opacity-100' : 'opacity-0 group-hover/colres:opacity-100'
+                        }`}
+                      />
+                      {/* Live full-sheet guideline across all rows during column resize */}
+                      {resizingCol?.col === colLetter && (
+                        <div className="absolute top-0 left-[4px] w-[2px] h-[5000px] bg-[#107c41] pointer-events-none z-50 shadow-xs" />
+                      )}
                     </div>
                   </th>
                 );
@@ -1383,14 +1522,22 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                     title={`Zaznacz cały wiersz ${rowNumber} (kliknij i przeciągnij)`}
                   >
                     <span>{rowNumber}</span>
-                    {/* Row resize boundary handle */}
+                    {/* Row resize boundary handle - centered precisely on row border */}
                     <div
                       onMouseDown={(e) => handleRowResizeStart(rowNumber, e)}
                       onDoubleClick={(e) => handleRowResetHeight(rowNumber, e)}
-                      className="absolute left-0 right-0 -bottom-1 h-2.5 cursor-row-resize z-30 group/rowres"
+                      className="absolute left-0 right-0 -bottom-[4px] h-[8px] cursor-row-resize z-30 group/rowres"
                       title={`Przeciągnij granicę, aby zmienić wysokość wiersza ${rowNumber} (podwójny klik: standardowa)`}
                     >
-                      <div className="h-[2px] w-full my-auto opacity-0 group-hover/rowres:opacity-100 bg-[#107c41] transition-opacity" />
+                      <div
+                        className={`absolute left-0 right-0 top-[3px] h-[2px] bg-[#107c41] transition-opacity shadow-xs ${
+                          resizingRow?.row === rowNumber ? 'opacity-100' : 'opacity-0 group-hover/rowres:opacity-100'
+                        }`}
+                      />
+                      {/* Live full-sheet guideline across all columns during resize */}
+                      {resizingRow?.row === rowNumber && (
+                        <div className="absolute left-0 w-[5000px] top-[3px] h-[2px] bg-[#107c41] pointer-events-none z-50 shadow-xs" />
+                      )}
                     </div>
                   </td>
                 )}
@@ -1403,6 +1550,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                   const selected = isCellSelected(cIdx, rowNumber);
                   const active = isCellActive(cIdx, rowNumber);
                   const inFillArea = isCellInFillArea(cIdx, rowNumber);
+                  const inFillExtension = isCellInFillExtension(cIdx, rowNumber);
                   const inFormulaPoint = isCellInFormulaPoint(cIdx, rowNumber);
                   const isTargetLesson = targetLessonCell === cellId;
 
@@ -1414,6 +1562,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                       : cell.raw
                     : '';
 
+                  const colWidth = getColWidth(colLetter);
+                  const borderCss = getCellBorderCss(style, isDarkMode);
+
                   // Is bottom-right corner of selection (for fill handle)
                   const isBottomRightCorner = cIdx === maxColIdx && rowNumber === maxRow;
 
@@ -1423,9 +1574,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                   const isSelLeftEdge = selected && cIdx === minColIdx && !isEntireSheetSelected;
                   const isSelRightEdge = selected && cIdx === maxColIdx && !isEntireSheetSelected;
 
-                  // Authentic Excel outer selection border
+                  // Authentic Excel outer selection border (preserved during autofill!)
                   let selectionEdgeClasses = '';
-                  if (selected && !inFillArea && !inFormulaPoint && !isEntireSheetSelected) {
+                  if (selected && !inFormulaPoint && !isEntireSheetSelected) {
                     if (isSelTopEdge) selectionEdgeClasses += ' border-t-2 border-t-[#107c41]';
                     if (isSelBottomEdge) selectionEdgeClasses += ' border-b-2 border-b-[#107c41]';
                     if (isSelLeftEdge) selectionEdgeClasses += ' border-l-2 border-l-[#107c41]';
@@ -1482,11 +1633,15 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                       onContextMenu={(e) => handleCellContextMenu(cellId, e)}
                       onDoubleClick={() => startEditing()}
                       style={{
-                        width: getColWidth(colLetter),
+                        width: colWidth,
+                        minWidth: colWidth,
+                        maxWidth: colWidth,
+                        overflow: 'hidden',
+                        boxSizing: 'border-box',
                         backgroundColor: inFormulaPoint
                           ? 'rgba(15, 108, 189, 0.12)'
-                          : inFillArea
-                          ? 'rgba(16, 124, 65, 0.16)'
+                          : inFillExtension
+                          ? 'rgba(16, 124, 65, 0.18)'
                           : isInMoveTarget
                           ? 'rgba(16, 124, 65, 0.22)'
                           : style.bgColor
@@ -1502,7 +1657,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                         fontSize: style.fontSize ? `${style.fontSize}px` : undefined,
                       }}
                       className={`relative px-1.5 py-0.5 text-xs truncate select-none tabular-numbers transition-colors ${
-                        showGridlines && !inFillArea && !inFormulaPoint
+                        showGridlines && !inFillExtension && !inFormulaPoint
                           ? isDarkMode
                             ? 'border-b border-r border-[#303030]'
                             : 'border-b border-r border-[#e0e0e0]'
@@ -1510,9 +1665,9 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                       } ${
                         inFormulaPoint
                           ? 'excel-marching-ants ring-2 ring-[#0f6cbd] z-15'
-                          : active && !inFillArea && (!selectionRange || (minColIdx === maxColIdx && minRow === maxRow))
+                          : active && !inFillExtension && (!selectionRange || (minColIdx === maxColIdx && minRow === maxRow))
                           ? 'outline-2 outline-[#107c41] outline-offset-[-2px] z-10 bg-white dark:bg-[#222222]'
-                          : selected && !inFillArea
+                          : selected && !inFillExtension
                           ? 'bg-[#107c41]/10'
                           : ''
                       } ${selectionEdgeClasses} ${moveTargetClasses} ${fillEdgeClasses} ${getBorderStyle(style)} ${
@@ -1576,25 +1731,52 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                             if (e.key === 'Enter') {
                               e.preventDefault();
                               e.stopPropagation();
-                              if (editValue.startsWith('=')) {
+                              const valToSave = editValue;
+                              const targetRow = e.shiftKey ? Math.max(1, activeCoord.row - 1) : activeCoord.row + 1;
+                              const nextCell = `${activeCoord.col}${targetRow}`;
+                              isNavigatingViaKeyRef.current = true;
+                              if (valToSave.startsWith('=')) {
                                 setIsEditing(false);
                                 onSubmitFormula?.(false);
                               } else {
-                                commitEdit();
-                                const nextCell = `${activeCoord.col}${activeCoord.row + 1}`;
-                                onSelectCell(nextCell);
+                                onCellChange(activeCellId, valToSave);
                               }
+                              onSelectCell(nextCell);
+                              const nextRaw = sheet.cells[nextCell]?.raw || '';
+                              setEditValue(nextRaw);
+                              setIsEditing(true);
+                              setTimeout(() => {
+                                isNavigatingViaKeyRef.current = false;
+                                if (editInputRef.current) {
+                                  editInputRef.current.focus();
+                                  editInputRef.current.select();
+                                }
+                              }, 40);
                             } else if (e.key === 'Tab') {
                               e.preventDefault();
                               e.stopPropagation();
-                              if (editValue.startsWith('=')) {
+                              const valToSave = editValue;
+                              const targetColIdx = e.shiftKey ? Math.max(0, activeColIdx - 1) : activeColIdx + 1;
+                              const nextCol = colIndexToLetter(targetColIdx);
+                              const nextCell = `${nextCol}${activeCoord.row}`;
+                              isNavigatingViaKeyRef.current = true;
+                              if (valToSave.startsWith('=')) {
                                 setIsEditing(false);
                                 onSubmitFormula?.(true);
                               } else {
-                                commitEdit();
-                                const nextCol = colIndexToLetter(activeColIdx + 1);
-                                onSelectCell(`${nextCol}${activeCoord.row}`);
+                                onCellChange(activeCellId, valToSave);
                               }
+                              onSelectCell(nextCell);
+                              const nextRaw = sheet.cells[nextCell]?.raw || '';
+                              setEditValue(nextRaw);
+                              setIsEditing(true);
+                              setTimeout(() => {
+                                isNavigatingViaKeyRef.current = false;
+                                if (editInputRef.current) {
+                                  editInputRef.current.focus();
+                                  editInputRef.current.select();
+                                }
+                              }, 40);
                             } else if (e.key === 'Escape') {
                               e.preventDefault();
                               e.stopPropagation();
@@ -1607,6 +1789,7 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                             }
                           }}
                           onBlur={() => {
+                            if (isNavigatingViaKeyRef.current) return;
                             if (!isPointingFormula && !isFormulaMode) {
                               commitEdit();
                             }
@@ -1616,7 +1799,25 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
                           }`}
                         />
                       ) : (
-                        <span>{displayValue}</span>
+                        <div
+                          className="w-full h-full overflow-hidden text-ellipsis whitespace-nowrap"
+                          title={displayValue}
+                        >
+                          {displayValue}
+                        </div>
+                      )}
+
+                      {/* Crisp Excel Cell Borders Overlay (Guarantees all 4 borders top, bottom, left, right are drawn) */}
+                      {borderCss.hasBorders && (
+                        <div
+                          className="pointer-events-none absolute -inset-[1px] z-5"
+                          style={{
+                            borderTop: borderCss.top || 'none',
+                            borderBottom: borderCss.bottom || 'none',
+                            borderLeft: borderCss.left || 'none',
+                            borderRight: borderCss.right || 'none',
+                          }}
+                        />
                       )}
 
                       {/* Formula Point Reference Badge */}
@@ -1981,6 +2182,20 @@ export const SpreadsheetGrid: React.FC<SpreadsheetGridProps> = ({
               </button>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* AutoFill Copy Modifier Badge (+ indicator like Excel when Ctrl/Meta/Alt is held) */}
+      {isDraggingFillHandle && isFillModifierActive && fillMousePos && (
+        <div
+          style={{
+            top: fillMousePos.y + 14,
+            left: fillMousePos.x + 14,
+          }}
+          className="fixed z-50 pointer-events-none px-2.5 py-1 bg-neutral-900/90 text-white text-[11px] font-sans rounded-md shadow-2xl border border-neutral-600 flex items-center gap-1.5 animate-in fade-in duration-75 select-none backdrop-blur-xs"
+        >
+          <span className="w-4 h-4 bg-emerald-600 text-white rounded flex items-center justify-center font-bold text-xs leading-none">+</span>
+          <span className="font-medium">Kopiuj komórki (Ctrl)</span>
         </div>
       )}
     </div>

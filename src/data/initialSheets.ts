@@ -4,47 +4,59 @@ export const INITIAL_SHEETS: SheetData[] = [
   {
     id: 'akademia-sheet',
     name: 'Akademia Excela',
-    colWidths: { A: 130, B: 150, C: 140, D: 130, E: 130, F: 40, G: 100, H: 170, I: 120 },
-    rowHeights: { 1: 30, 2: 26, 8: 26, 9: 26, 10: 26, 12: 26, 15: 26, 16: 26, 20: 26, 24: 26 },
+    colWidths: { A: 130, B: 150, C: 140, D: 130, E: 170, F: 140, G: 100, H: 170, I: 130 },
+    rowHeights: { 1: 30, 2: 26, 8: 26, 9: 26, 10: 26, 11: 26, 12: 26, 15: 26, 16: 26, 20: 26, 24: 26 },
     cells: {
-      // Header Section 1: Wyniki Sprzedaży Q1
+      // Header Section 1: Wyniki Sprzedaży Q1 + Data + Kurs waluty
       A1: { raw: 'RAPORT SPRZEDAŻY REGIONALNEJ Q1', style: { bold: true, fontSize: 13, textColor: '#107c41' } },
+      D1: { raw: 'Data raportu:', style: { bold: true, align: 'right' } },
+      E1: { raw: '', style: { border: 'all', bgColor: '#eff6ff', align: 'center' } },
+      H1: { raw: 'Kurs EUR (PLN):', style: { bold: true, align: 'right' } },
+      I1: { raw: '4.30', computed: 4.3, style: { bold: true, align: 'right', format: 'number', decimals: 2, bgColor: '#fef3c7', border: 'all' } },
+
+      // Table Headers (Row 2)
       A2: { raw: 'Region', style: { bold: true, bgColor: '#e1dfdd', align: 'left', border: 'all' } },
       B2: { raw: 'Kierownik', style: { bold: true, bgColor: '#e1dfdd', align: 'left', border: 'all' } },
       C2: { raw: 'Sprzedaż Netto', style: { bold: true, bgColor: '#e1dfdd', align: 'right', border: 'all' } },
       D2: { raw: 'VAT (23%)', style: { bold: true, bgColor: '#e1dfdd', align: 'right', border: 'all' } },
       E2: { raw: 'Premia (Cel > 5000)', style: { bold: true, bgColor: '#e1dfdd', align: 'right', border: 'all' } },
+      F2: { raw: 'Przeliczenie EUR ($)', style: { bold: true, bgColor: '#e1dfdd', align: 'right', border: 'all' } },
 
       // Data Rows 3-7
       A3: { raw: 'Północ', style: { border: 'all' } },
-      B3: { raw: 'Marek Nowak', style: { border: 'all' } },
+      B3: { raw: '', style: { border: 'all' } },
       C3: { raw: '5200', computed: 5200, style: { format: 'currency', align: 'right', border: 'all' } },
       D3: { raw: '', style: { format: 'currency', align: 'right', border: 'all' } },
       E3: { raw: '', style: { format: 'currency', align: 'right', border: 'all' } },
+      F3: { raw: '', style: { format: 'currency', align: 'right', border: 'all', bgColor: '#fffbeb' } },
 
       A4: { raw: 'Południe', style: { border: 'all' } },
       B4: { raw: 'Ewa Wiśniewska', style: { border: 'all' } },
       C4: { raw: '4100', computed: 4100, style: { format: 'currency', align: 'right', border: 'all' } },
       D4: { raw: '=C4*0.23', computed: 943, style: { format: 'currency', align: 'right', border: 'all' } },
       E4: { raw: '=JEŻELI(C4>5000; 500; 0)', computed: 0, style: { format: 'currency', align: 'right', border: 'all' } },
+      F4: { raw: '', style: { format: 'currency', align: 'right', border: 'all' } },
 
       A5: { raw: 'Wschód', style: { border: 'all' } },
       B5: { raw: 'Kamil Zieliński', style: { border: 'all' } },
       C5: { raw: '3200', computed: 3200, style: { format: 'currency', align: 'right', border: 'all' } },
       D5: { raw: '=C5*0.23', computed: 736, style: { format: 'currency', align: 'right', border: 'all' } },
       E5: { raw: '=JEŻELI(C5>5000; 500; 0)', computed: 0, style: { format: 'currency', align: 'right', border: 'all' } },
+      F5: { raw: '', style: { format: 'currency', align: 'right', border: 'all' } },
 
       A6: { raw: 'Zachód', style: { border: 'all' } },
       B6: { raw: 'Karolina Dąbrowska', style: { border: 'all' } },
       C6: { raw: '6200', computed: 6200, style: { format: 'currency', align: 'right', border: 'all' } },
       D6: { raw: '=C6*0.23', computed: 1426, style: { format: 'currency', align: 'right', border: 'all' } },
       E6: { raw: '=JEŻELI(C6>5000; 500; 0)', computed: 500, style: { format: 'currency', align: 'right', border: 'all' } },
+      F6: { raw: '', style: { format: 'currency', align: 'right', border: 'all' } },
 
       A7: { raw: 'Centralny', style: { border: 'all' } },
       B7: { raw: 'Tomasz Lewandowski', style: { border: 'all' } },
       C7: { raw: '2900', computed: 2900, style: { format: 'currency', align: 'right', border: 'all' } },
       D7: { raw: '=C7*0.23', computed: 667, style: { format: 'currency', align: 'right', border: 'all' } },
       E7: { raw: '=JEŻELI(C7>5000; 500; 0)', computed: 0, style: { format: 'currency', align: 'right', border: 'all' } },
+      F7: { raw: '', style: { format: 'currency', align: 'right', border: 'all' } },
 
       // Summary lines
       B8: { raw: 'Suma sprzedaży:', style: { bold: true, align: 'right' } },
@@ -53,13 +65,24 @@ export const INITIAL_SHEETS: SheetData[] = [
       B9: { raw: 'Średnia sprzedaż:', style: { bold: true, align: 'right' } },
       C9: { raw: '', style: { bold: true, format: 'currency', align: 'right', bgColor: '#f0fdf4', border: 'all' } },
 
-      B10: { raw: 'Najwyższa sprzedaż (MAX):', style: { bold: true, align: 'right' } },
+      B10: { raw: 'Najwyższa sprzedaż:', style: { bold: true, align: 'right' } },
       C10: { raw: '', style: { bold: true, format: 'currency', align: 'right', bgColor: '#f0fdf4', border: 'all' } },
+
+      B11: { raw: 'Najniższa sprzedaż:', style: { bold: true, align: 'right' } },
+      C11: { raw: '', style: { bold: true, format: 'currency', align: 'right', bgColor: '#f0fdf4', border: 'all' } },
 
       B12: { raw: 'Liczba celów > 4000 zł:', style: { bold: true, align: 'right' } },
       C12: { raw: '', style: { bold: true, format: 'number', decimals: 0, align: 'right', bgColor: '#eff6ff', border: 'all' } },
 
-      // Section: Cennik produktów (G2:I8)
+      // Section: Harmonogram dni roboczych (Przeciąganie serii E15:E19)
+      E14: { raw: 'Harmonogram (Przeciągnij w dół):', style: { bold: true, fontSize: 11, textColor: '#107c41' } },
+      E15: { raw: 'Poniedziałek', style: { bold: true, bgColor: '#f0fdf4', border: 'all' } },
+      E16: { raw: '', style: { border: 'all' } },
+      E17: { raw: '', style: { border: 'all' } },
+      E18: { raw: '', style: { border: 'all' } },
+      E19: { raw: '', style: { border: 'all' } },
+
+      // Section: Cennik produktów (G2:I7)
       G2: { raw: 'Kod ID', style: { bold: true, bgColor: '#0f6cbd', textColor: '#ffffff', align: 'center', border: 'all' } },
       H2: { raw: 'Nazwa Produktu', style: { bold: true, bgColor: '#0f6cbd', textColor: '#ffffff', align: 'left', border: 'all' } },
       I2: { raw: 'Cena Kat. (PLN)', style: { bold: true, bgColor: '#0f6cbd', textColor: '#ffffff', align: 'right', border: 'all' } },
@@ -84,8 +107,8 @@ export const INITIAL_SHEETS: SheetData[] = [
       H7: { raw: 'Stacja Dokująca USB-C', style: { border: 'all' } },
       I7: { raw: '790', computed: 790, style: { border: 'all', format: 'currency', align: 'right' } },
 
-      // Section: Formularz WYSZUKAJ.PIONOWO (Zadanie 7)
-      A15: { raw: 'WYSZUKIWANIE Z CENNIKA (VLOOKUP)', style: { bold: true, fontSize: 12, textColor: '#0f6cbd' } },
+      // Section: Formularz wyszukiwania z cennika
+      A15: { raw: 'WYSZUKIWANIE Z CENNIKA', style: { bold: true, fontSize: 12, textColor: '#0f6cbd' } },
       B15: { raw: 'Szukany Kod', style: { bold: true, bgColor: '#e1dfdd', align: 'center', border: 'all' } },
       C15: { raw: 'Status', style: { bold: true, bgColor: '#e1dfdd', align: 'left', border: 'all' } },
       D15: { raw: 'Cena z Cennika', style: { bold: true, bgColor: '#e1dfdd', align: 'right', border: 'all' } },
@@ -94,8 +117,8 @@ export const INITIAL_SHEETS: SheetData[] = [
       C16: { raw: 'Dostępny', style: { align: 'left', border: 'all' } },
       D16: { raw: '', style: { bold: true, format: 'currency', align: 'right', bgColor: '#fef3c7', border: 'all' } },
 
-      // Section: Łączenie Tekstów (Zadanie 8)
-      A19: { raw: 'BAZA PRACOWNIKÓW (ZŁĄCZ.TEKSTY)', style: { bold: true, fontSize: 12, textColor: '#107c41' } },
+      // Section: Łączenie Tekstów
+      A19: { raw: 'BAZA PRACOWNIKÓW', style: { bold: true, fontSize: 12, textColor: '#107c41' } },
       A20: { raw: 'Imię', style: { bold: true, bgColor: '#e1dfdd', border: 'all' } },
       B20: { raw: 'Nazwisko', style: { bold: true, bgColor: '#e1dfdd', border: 'all' } },
       C20: { raw: 'Imię i Nazwisko', style: { bold: true, bgColor: '#e1dfdd', border: 'all' } },
@@ -104,8 +127,8 @@ export const INITIAL_SHEETS: SheetData[] = [
       B21: { raw: 'Kowalska', style: { border: 'all' } },
       C21: { raw: '', style: { bgColor: '#f0fdf4', border: 'all' } },
 
-      // Section: SUMA.JEŻELI (Zadanie 9)
-      A23: { raw: 'ZAMÓWIENIA WG KATEGORII (SUMA.JEŻELI)', style: { bold: true, fontSize: 12, textColor: '#107c41' } },
+      // Section: Zamówienia wg kategorii
+      A23: { raw: 'ZAMÓWIENIA WG KATEGORII', style: { bold: true, fontSize: 12, textColor: '#107c41' } },
       A24: { raw: 'Zamówienie', style: { bold: true, bgColor: '#e1dfdd', border: 'all' } },
       B24: { raw: 'Kategoria', style: { bold: true, bgColor: '#e1dfdd', border: 'all' } },
       C24: { raw: 'Kwota', style: { bold: true, bgColor: '#e1dfdd', align: 'right', border: 'all' } },

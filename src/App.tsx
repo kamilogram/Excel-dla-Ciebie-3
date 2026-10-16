@@ -8,6 +8,8 @@ import {
   UserBadge,
   LeaderboardUser,
   UserProfile,
+  BorderActionType,
+  BorderLineStyle,
 } from './types/excel';
 import {
   INITIAL_SHEETS,
@@ -24,6 +26,8 @@ import {
   getRangeCells,
   insertOrReplaceCellRef,
 } from './utils/formulaEngine';
+import { predictNextValue, SliceCell } from './utils/autoFillSeries';
+import { applyBordersToCells } from './utils/borderUtils';
 import { sounds } from './utils/audio';
 import { ExcelHeader } from './components/ExcelHeader';
 import { ExcelRibbon, RibbonTab } from './components/ExcelRibbon';
@@ -183,9 +187,9 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 4500);
   }, []);
 
-  // Push snapshot to undo stack
+  // Push snapshot to undo stack (extended undo history: up to 100 steps)
   const pushUndo = useCallback(() => {
-    setUndoStack((prev) => [...prev.slice(-25), sheets]);
+    setUndoStack((prev) => [...prev.slice(-100), sheets]);
     setRedoStack([]);
   }, [sheets]);
 
@@ -609,52 +613,89 @@ export default function App() {
     handleRedo,
   ]);
 
+  // Apply border action to active cell or selection range
+  const handleApplyBorder = useCallback(
+    (
+      action: BorderActionType,
+      options?: { lineStyle?: BorderLineStyle; lineWidth?: number; lineColor?: string }
+    ) => {
+      pushUndo();
+      const target = selectionRange || activeCellId;
+      setSheets((prevSheets) => {
+        const updated = prevSheets.map((s) => {
+          if (s.id !== activeSheetId) return s;
+          const newCells = applyBordersToCells(s.cells, {
+            action,
+            range: target,
+            lineStyle: options?.lineStyle || 'solid',
+            lineWidth: options?.lineWidth || 1,
+            lineColor: options?.lineColor || '#000000',
+          });
+          return { ...s, cells: newCells };
+        });
+        saveToStorage(updated, userProfile, badges);
+        return updated;
+      });
+      sounds.playPop();
+    },
+    [selectionRange, activeCellId, activeSheetId, pushUndo, saveToStorage, userProfile, badges]
+  );
+
   // Apply style to active cell or selection range
-  const handleApplyStyle = useCallback((stylePatch: Partial<CellStyle>) => {
-    pushUndo();
+  const handleApplyStyle = useCallback(
+    (stylePatch: Partial<CellStyle>) => {
+      // If border is part of stylePatch, route through robust border applicator
+      if (stylePatch.border) {
+        handleApplyBorder(stylePatch.border as BorderActionType);
+        return;
+      }
 
-    const cellsToStyle: string[] = [];
-    if (!selectionRange) {
-      cellsToStyle.push(activeCellId);
-    } else {
-      const c1 = letterToColIndex(selectionRange.startCol);
-      const c2 = letterToColIndex(selectionRange.endCol);
-      const minC = Math.min(c1, c2);
-      const maxC = Math.max(c1, c2);
+      pushUndo();
 
-      const minR = Math.min(selectionRange.startRow, selectionRange.endRow);
-      const maxR = Math.max(selectionRange.startRow, selectionRange.endRow);
+      const cellsToStyle: string[] = [];
+      if (!selectionRange) {
+        cellsToStyle.push(activeCellId);
+      } else {
+        const c1 = letterToColIndex(selectionRange.startCol);
+        const c2 = letterToColIndex(selectionRange.endCol);
+        const minC = Math.min(c1, c2);
+        const maxC = Math.max(c1, c2);
 
-      for (let r = minR; r <= maxR; r++) {
-        for (let c = minC; c <= maxC; c++) {
-          cellsToStyle.push(`${String.fromCharCode(c + 65)}${r}`);
+        const minR = Math.min(selectionRange.startRow, selectionRange.endRow);
+        const maxR = Math.max(selectionRange.startRow, selectionRange.endRow);
+
+        for (let r = minR; r <= maxR; r++) {
+          for (let c = minC; c <= maxC; c++) {
+            cellsToStyle.push(`${String.fromCharCode(c + 65)}${r}`);
+          }
         }
       }
-    }
 
-    setSheets((prevSheets) => {
-      const updated = prevSheets.map((s) => {
-        if (s.id !== activeSheetId) return s;
-        const newCells = { ...s.cells };
+      setSheets((prevSheets) => {
+        const updated = prevSheets.map((s) => {
+          if (s.id !== activeSheetId) return s;
+          const newCells = { ...s.cells };
 
-        cellsToStyle.forEach((id) => {
-          const current = newCells[id] || { raw: '' };
-          newCells[id] = {
-            ...current,
-            style: {
-              ...(current.style || {}),
-              ...stylePatch,
-            },
-          };
+          cellsToStyle.forEach((id) => {
+            const current = newCells[id] || { raw: '' };
+            newCells[id] = {
+              ...current,
+              style: {
+                ...(current.style || {}),
+                ...stylePatch,
+              },
+            };
+          });
+
+          return { ...s, cells: newCells };
         });
 
-        return { ...s, cells: newCells };
+        saveToStorage(updated, userProfile, badges);
+        return updated;
       });
-
-      saveToStorage(updated, userProfile, badges);
-      return updated;
-    });
-  }, [pushUndo, selectionRange, activeCellId, activeSheetId, saveToStorage, userProfile, badges]);
+    },
+    [handleApplyBorder, pushUndo, selectionRange, activeCellId, activeSheetId, saveToStorage, userProfile, badges]
+  );
 
   // Format Painter handlers
   const handleToggleFormatPainter = useCallback((lock: boolean = false) => {
@@ -805,53 +846,206 @@ export default function App() {
     triggerToast('📋 Wklejono', `Wklejono zawartość do ${activeCellId}.`);
     sounds.playSuccess();
   }, [clipboardData, activeCellId, pushUndo, handleCellChange, handleApplyStyle, triggerToast]);
-  const handleAutoFill = useCallback((sourceRange: SelectionRange, targetRange: SelectionRange) => {
+  const handleAutoFill = useCallback((sourceRange: SelectionRange, targetRange: SelectionRange, copyOnly: boolean = false) => {
     pushUndo();
 
-    const srcCells = getRangeCells(`${sourceRange.startCol}${sourceRange.startRow}:${sourceRange.endCol}${sourceRange.endRow}`);
-    const tgtCells = getRangeCells(`${targetRange.startCol}${targetRange.startRow}:${targetRange.endCol}${targetRange.endRow}`);
+    // 1. Calculate normalized source bounds
+    const srcC1 = letterToColIndex(sourceRange.startCol);
+    const srcC2 = letterToColIndex(sourceRange.endCol);
+    const minSrcCol = Math.min(srcC1, srcC2);
+    const maxSrcCol = Math.max(srcC1, srcC2);
+    const minSrcRow = Math.min(sourceRange.startRow, sourceRange.endRow);
+    const maxSrcRow = Math.max(sourceRange.startRow, sourceRange.endRow);
+
+    // 2. Calculate normalized target bounds
+    const tgtC1 = letterToColIndex(targetRange.startCol);
+    const tgtC2 = letterToColIndex(targetRange.endCol);
+    const minTgtCol = Math.min(tgtC1, tgtC2);
+    const maxTgtCol = Math.max(tgtC1, tgtC2);
+    const minTgtRow = Math.min(targetRange.startRow, targetRange.endRow);
+    const maxTgtRow = Math.max(targetRange.startRow, targetRange.endRow);
+
+    // Full bounding box of the autofill operation
+    const fullMinCol = Math.min(minSrcCol, minTgtCol);
+    const fullMaxCol = Math.max(maxSrcCol, maxTgtCol);
+    const fullMinRow = Math.min(minSrcRow, minTgtRow);
+    const fullMaxRow = Math.max(maxSrcRow, maxTgtRow);
+
+    // If target range is identical to source range, nothing to fill
+    if (
+      minSrcCol === fullMinCol &&
+      maxSrcCol === fullMaxCol &&
+      minSrcRow === fullMinRow &&
+      maxSrcRow === fullMaxRow
+    ) {
+      return;
+    }
 
     setSheets((prevSheets) => {
       const updated = prevSheets.map((s) => {
         if (s.id !== activeSheetId) return s;
+        // Start from existing cells; NEVER overwrite source cells!
         const newCells = { ...s.cells };
 
-        // Determine direction and fill logic
-        tgtCells.forEach((tgtCellId, idx) => {
-          // Source pattern cell
-          const srcCellId = srcCells[idx % srcCells.length];
-          const srcCell = s.cells[srcCellId];
+        // Determine primary extension direction:
+        // Downward extension (e.g. dragging downwards)
+        if (maxTgtRow > maxSrcRow) {
+          for (let c = minSrcCol; c <= maxSrcCol; c++) {
+            const sourceSlice: SliceCell[] = [];
+            for (let r = minSrcRow; r <= maxSrcRow; r++) {
+              const id = `${colIndexToLetter(c)}${r}`;
+              const cell = s.cells[id];
+              sourceSlice.push({
+                cellId: id,
+                raw: cell?.raw ?? '',
+                computed: cell?.computed,
+                style: cell?.style,
+              });
+            }
 
-          if (!srcCell) return;
-
-          const srcCoord = parseCellAddress(srcCellId);
-          const tgtCoord = parseCellAddress(tgtCellId);
-          if (!srcCoord || !tgtCoord) return;
-
-          const rowOffset = tgtCoord.row - srcCoord.row;
-
-          let newRaw = srcCell.raw;
-
-          // If source is a formula (e.g. =C3*0.23 or =B3-C3), shift cell references down!
-          if (newRaw.startsWith('=')) {
-            newRaw = newRaw.replace(/([A-Z]+)(\d+)/g, (match, col, row) => {
-              const shiftedRow = parseInt(row, 10) + rowOffset;
-              return `${col}${shiftedRow}`;
-            });
-          } else if (!isNaN(Number(srcCell.raw)) && srcCell.raw.trim() !== '') {
-            // Number sequence increment
-            const baseNum = Number(srcCell.raw);
-            const step = Math.floor(idx / srcCells.length) + 1;
-            newRaw = String(baseNum + step);
+            const sliceLen = sourceSlice.length;
+            for (let r = maxSrcRow + 1; r <= maxTgtRow; r++) {
+              const destId = `${colIndexToLetter(c)}${r}`;
+              if (copyOnly) {
+                const offset = (r - maxSrcRow - 1) % sliceLen;
+                const srcItem = sourceSlice[offset];
+                newCells[destId] = {
+                  raw: srcItem.raw,
+                  computed: srcItem.computed !== undefined ? srcItem.computed : srcItem.raw,
+                  style: srcItem.style ? { ...srcItem.style } : undefined,
+                };
+              } else {
+                const stepOffset = r - maxSrcRow;
+                const dRow = r - maxSrcRow;
+                const predicted = predictNextValue(sourceSlice, stepOffset, 0, dRow);
+                newCells[destId] = {
+                  raw: predicted.raw,
+                  computed: predicted.raw,
+                  style: predicted.style ? { ...predicted.style } : undefined,
+                };
+              }
+            }
           }
+        }
+        // Upward extension (e.g. dragging upwards)
+        else if (minTgtRow < minSrcRow) {
+          for (let c = minSrcCol; c <= maxSrcCol; c++) {
+            const sourceSlice: SliceCell[] = [];
+            for (let r = minSrcRow; r <= maxSrcRow; r++) {
+              const id = `${colIndexToLetter(c)}${r}`;
+              const cell = s.cells[id];
+              sourceSlice.push({
+                cellId: id,
+                raw: cell?.raw ?? '',
+                computed: cell?.computed,
+                style: cell?.style,
+              });
+            }
 
-          newCells[tgtCellId] = {
-            ...srcCell,
-            raw: newRaw,
-            style: { ...(srcCell.style || {}) },
-          };
-        });
+            const sliceLen = sourceSlice.length;
+            for (let r = minSrcRow - 1; r >= minTgtRow; r--) {
+              const destId = `${colIndexToLetter(c)}${r}`;
+              if (copyOnly) {
+                const offset = (minSrcRow - 1 - r) % sliceLen;
+                const srcItem = sourceSlice[(sliceLen - 1 - offset + sliceLen) % sliceLen];
+                newCells[destId] = {
+                  raw: srcItem.raw,
+                  computed: srcItem.computed !== undefined ? srcItem.computed : srcItem.raw,
+                  style: srcItem.style ? { ...srcItem.style } : undefined,
+                };
+              } else {
+                const stepOffset = r - minSrcRow; // negative offset
+                const dRow = r - minSrcRow;
+                const predicted = predictNextValue(sourceSlice, stepOffset, 0, dRow);
+                newCells[destId] = {
+                  raw: predicted.raw,
+                  computed: predicted.raw,
+                  style: predicted.style ? { ...predicted.style } : undefined,
+                };
+              }
+            }
+          }
+        }
+        // Rightward extension (e.g. dragging rightwards)
+        else if (maxTgtCol > maxSrcCol) {
+          for (let r = minSrcRow; r <= maxSrcRow; r++) {
+            const sourceSlice: SliceCell[] = [];
+            for (let c = minSrcCol; c <= maxSrcCol; c++) {
+              const id = `${colIndexToLetter(c)}${r}`;
+              const cell = s.cells[id];
+              sourceSlice.push({
+                cellId: id,
+                raw: cell?.raw ?? '',
+                computed: cell?.computed,
+                style: cell?.style,
+              });
+            }
 
+            const sliceLen = sourceSlice.length;
+            for (let c = maxSrcCol + 1; c <= maxTgtCol; c++) {
+              const destId = `${colIndexToLetter(c)}${r}`;
+              if (copyOnly) {
+                const offset = (c - maxSrcCol - 1) % sliceLen;
+                const srcItem = sourceSlice[offset];
+                newCells[destId] = {
+                  raw: srcItem.raw,
+                  computed: srcItem.computed !== undefined ? srcItem.computed : srcItem.raw,
+                  style: srcItem.style ? { ...srcItem.style } : undefined,
+                };
+              } else {
+                const stepOffset = c - maxSrcCol;
+                const dCol = c - maxSrcCol;
+                const predicted = predictNextValue(sourceSlice, stepOffset, dCol, 0);
+                newCells[destId] = {
+                  raw: predicted.raw,
+                  computed: predicted.raw,
+                  style: predicted.style ? { ...predicted.style } : undefined,
+                };
+              }
+            }
+          }
+        }
+        // Leftward extension (e.g. dragging leftwards)
+        else if (minTgtCol < minSrcCol) {
+          for (let r = minSrcRow; r <= maxSrcRow; r++) {
+            const sourceSlice: SliceCell[] = [];
+            for (let c = minSrcCol; c <= maxSrcCol; c++) {
+              const id = `${colIndexToLetter(c)}${r}`;
+              const cell = s.cells[id];
+              sourceSlice.push({
+                cellId: id,
+                raw: cell?.raw ?? '',
+                computed: cell?.computed,
+                style: cell?.style,
+              });
+            }
+
+            const sliceLen = sourceSlice.length;
+            for (let c = minSrcCol - 1; c >= minTgtCol; c--) {
+              const destId = `${colIndexToLetter(c)}${r}`;
+              if (copyOnly) {
+                const offset = (minSrcCol - 1 - c) % sliceLen;
+                const srcItem = sourceSlice[(sliceLen - 1 - offset + sliceLen) % sliceLen];
+                newCells[destId] = {
+                  raw: srcItem.raw,
+                  computed: srcItem.computed !== undefined ? srcItem.computed : srcItem.raw,
+                  style: srcItem.style ? { ...srcItem.style } : undefined,
+                };
+              } else {
+                const stepOffset = c - minSrcCol; // negative offset
+                const dCol = c - minSrcCol;
+                const predicted = predictNextValue(sourceSlice, stepOffset, dCol, 0);
+                newCells[destId] = {
+                  raw: predicted.raw,
+                  computed: predicted.raw,
+                  style: predicted.style ? { ...predicted.style } : undefined,
+                };
+              }
+            }
+          }
+        }
+
+        // Recompute sheet so formulas and formatted numbers calculate accurately
         const recomputed = recomputeSheet({ ...s, cells: newCells });
         verifyCurrentTask(recomputed);
         return recomputed;
@@ -860,7 +1054,28 @@ export default function App() {
       saveToStorage(updated, userProfile, badges);
       return updated;
     });
-  }, [pushUndo, activeSheetId, recomputeSheet, verifyCurrentTask, saveToStorage, userProfile, badges]);
+
+    // Expand the selection to cover the whole series like real Excel!
+    const newSelection: SelectionRange = {
+      startCol: colIndexToLetter(fullMinCol),
+      startRow: fullMinRow,
+      endCol: colIndexToLetter(fullMaxCol),
+      endRow: fullMaxRow,
+    };
+    setSelectionRange(newSelection);
+    sounds.playSuccess();
+    if (copyOnly) {
+      triggerToast(
+        '📑 Kopiowanie komórek (Ctrl)',
+        `Zawartość komórek została skopiowana (${colIndexToLetter(fullMinCol)}${fullMinRow}:${colIndexToLetter(fullMaxCol)}${fullMaxRow}) z wyłączoną predykcją ciągu.`
+      );
+    } else {
+      triggerToast(
+        '✨ Autouzupełnianie serii',
+        `Uzupełniono wartości ciągu (${colIndexToLetter(fullMinCol)}${fullMinRow}:${colIndexToLetter(fullMaxCol)}${fullMaxRow}) z zachowaniem danych źródłowych.`
+      );
+    }
+  }, [pushUndo, activeSheetId, recomputeSheet, verifyCurrentTask, saveToStorage, userProfile, badges, triggerToast]);
 
   // Move cells handler (Drag & Move cell or selection range like real Excel)
   const handleMoveCells = useCallback((
@@ -1218,7 +1433,7 @@ export default function App() {
           ...s,
           colWidths: {
             ...s.colWidths,
-            [col]: Math.max(30, Math.round(width)),
+            [col]: Math.max(8, Math.round(width)),
           },
         };
       });
@@ -1311,6 +1526,7 @@ export default function App() {
           onTabChange={setActiveTab}
           currentStyle={activeSheet.cells[activeCellId]?.style}
           onApplyStyle={handleApplyStyle}
+          onApplyBorder={handleApplyBorder}
           onAutoSum={handleAutoSum}
           onSort={handleSort}
           onInsertRow={handleInsertRow}
@@ -1450,7 +1666,6 @@ export default function App() {
             } else {
               setIsFormulaMode(false);
             }
-            handleCellChange(activeCellId, val);
           }}
         />
 

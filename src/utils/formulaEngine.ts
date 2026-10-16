@@ -199,8 +199,8 @@ export function evaluateFormula(
     const evaluatedExpr = evaluateFunctions(expr, getCellValue, sheet);
     if (evaluatedExpr.error) return { result: evaluatedExpr.error, error: evaluatedExpr.error };
 
-    // 2. Evaluate remaining cell references (like A1 + B2)
-    const resolvedMath = evaluatedExpr.result.replace(/\b([A-Z]+[0-9]+)\b/gi, (match: string) => {
+    // 2. Evaluate remaining cell references (like A1 + B2, or $C$3 * $K$2)
+    const resolvedMath = evaluatedExpr.result.replace(/(?:\$?[A-Z]+\$?[0-9]+)\b/gi, (match: string) => {
       const val = getCellValue(match);
       if (typeof val === 'number') return String(val);
       if (typeof val === 'string') {
@@ -599,8 +599,11 @@ function safeMathEval(expr: string): any {
     }).join('');
   }
 
+  // Support percentage notation e.g. * 23% -> * (23 * 0.01)
+  const percentNormalized = clean.replace(/(\d+(?:\.\d+)?)%/g, '($1*0.01)');
+
   // Remove any dangerous characters, only allow digits, operators, parens, decimal dot
-  const sanitized = clean.replace(/[^0-9+\-*/().\s]/g, '');
+  const sanitized = percentNormalized.replace(/[^0-9+\-*/().\s]/g, '');
   if (!sanitized) return clean;
 
   try {

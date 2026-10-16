@@ -36,7 +36,7 @@ import {
   Scissors,
   ClipboardPaste,
 } from 'lucide-react';
-import { CellStyle } from '../types/excel';
+import { CellStyle, BorderActionType, BorderLineStyle } from '../types/excel';
 
 export type RibbonTab = 'home' | 'insert' | 'formulas' | 'data' | 'view' | 'learn' | 'compete';
 
@@ -45,6 +45,10 @@ interface ExcelRibbonProps {
   onTabChange: (tab: RibbonTab) => void;
   currentStyle?: CellStyle;
   onApplyStyle: (stylePatch: Partial<CellStyle>) => void;
+  onApplyBorder?: (
+    action: BorderActionType,
+    options?: { lineStyle?: BorderLineStyle; lineWidth?: number; lineColor?: string }
+  ) => void;
   onAutoSum: (formulaType: 'SUMA' | 'ŚREDNIA' | 'MAX' | 'MIN' | 'ILE.LICZB') => void;
   onSort: (direction: 'asc' | 'desc') => void;
   onInsertRow: () => void;
@@ -79,6 +83,7 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
   onTabChange,
   currentStyle = {},
   onApplyStyle,
+  onApplyBorder,
   onAutoSum,
   onSort,
   onInsertRow,
@@ -114,6 +119,12 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
 
   const [selectedFillColor, setSelectedFillColor] = useState<string>('#fef3c7');
   const [selectedTextColor, setSelectedTextColor] = useState<string>('#dc2626');
+
+  // Rich Excel Border Options State
+  const [selectedBorderLineStyle, setSelectedBorderLineStyle] = useState<BorderLineStyle>('solid');
+  const [selectedBorderLineWidth, setSelectedBorderLineWidth] = useState<number>(1);
+  const [selectedBorderColor, setSelectedBorderColor] = useState<string>('#000000');
+  const [lastBorderAction, setLastBorderAction] = useState<BorderActionType>('all');
 
   // Close all open dropdowns on outside click
   useEffect(() => {
@@ -413,8 +424,29 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
                 )}
               </div>
 
-              {/* Borders dropdown */}
-              <div className="relative">
+              {/* Complete Office 365 Borders Suite */}
+              <div className="relative flex items-center rounded border border-transparent hover:border-neutral-300 dark:hover:border-neutral-600 hover:bg-neutral-100 dark:hover:bg-neutral-700">
+                {/* Main button: applies last selected border action */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onApplyBorder) {
+                      onApplyBorder(lastBorderAction, {
+                        lineStyle: selectedBorderLineStyle,
+                        lineWidth: selectedBorderLineWidth,
+                        lineColor: selectedBorderColor,
+                      });
+                    } else {
+                      onApplyStyle({ border: lastBorderAction });
+                    }
+                  }}
+                  title={`Zastosuj krawędzie: ${lastBorderAction} (${selectedBorderLineWidth}px ${selectedBorderLineStyle})`}
+                  className="p-1 rounded-l flex items-center justify-center min-w-[24px] cursor-pointer"
+                >
+                  <Table size={13} className="text-neutral-700 dark:text-neutral-200" />
+                </button>
+
+                {/* Dropdown Chevron */}
                 <button
                   type="button"
                   onClick={(e) => {
@@ -424,45 +456,321 @@ export const ExcelRibbon: React.FC<ExcelRibbonProps> = ({
                     setShowTextColorPicker(false);
                     setShowAutoSumMenu(false);
                   }}
-                  title="Krawędzie komórki"
-                  className="p-1.5 rounded hover:bg-neutral-100 dark:hover:bg-neutral-700 flex items-center gap-0.5 border border-transparent hover:border-neutral-300 dark:hover:border-neutral-600 cursor-pointer"
+                  title="Wybierz styl i krawędzie komórki"
+                  className="px-0.5 py-2 rounded-r hover:bg-neutral-200 dark:hover:bg-neutral-600 cursor-pointer"
                 >
-                  <Table size={14} />
                   <ChevronDown size={10} />
                 </button>
+
                 {showBorderMenu && (
                   <div
                     onClick={(e) => e.stopPropagation()}
-                    className="absolute top-9 left-0 z-50 p-1.5 bg-white dark:bg-[#2b2b2b] shadow-2xl rounded-md border border-neutral-300 dark:border-neutral-700 flex flex-col gap-1 w-48 text-xs animate-in fade-in zoom-in-95 duration-100"
+                    className="absolute top-9 left-0 z-50 p-2 bg-white dark:bg-[#282828] shadow-2xl rounded-lg border border-neutral-300 dark:border-neutral-700 flex flex-col gap-2 w-72 max-h-[480px] overflow-y-auto text-xs animate-in fade-in zoom-in-95 duration-100 select-none scrollbar-thin"
                   >
-                    <button
-                      type="button"
-                      onClick={() => { onApplyStyle({ border: 'all' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded cursor-pointer"
-                    >
-                      Wszystkie krawędzie
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { onApplyStyle({ border: 'outside' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded cursor-pointer"
-                    >
-                      Krawędzie zewnętrzne
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { onApplyStyle({ border: 'thick-bottom' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded cursor-pointer"
-                    >
-                      Gruba dolna krawędź sumy
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { onApplyStyle({ border: 'none' }); setShowBorderMenu(false); }}
-                      className="px-2 py-1.5 text-left hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded text-neutral-500 cursor-pointer"
-                    >
-                      Brak krawędzi
-                    </button>
+                    {/* Header */}
+                    <div className="flex items-center justify-between pb-1.5 border-b border-neutral-200 dark:border-neutral-700">
+                      <span className="font-semibold text-[11px] text-neutral-600 dark:text-neutral-300">
+                        Krawędzie komórek
+                      </span>
+                      <div className="flex items-center gap-1.5 text-[10px] text-neutral-500 dark:text-neutral-400">
+                        <span
+                          className="w-3.5 h-3.5 rounded-full border border-neutral-400"
+                          style={{ backgroundColor: selectedBorderColor }}
+                        />
+                        <span className="font-mono">{selectedBorderLineWidth}px</span>
+                      </div>
+                    </div>
+
+                    {/* Standard Border Actions */}
+                    <div className="flex flex-col gap-0.5">
+                      <div className="text-[10px] uppercase font-semibold text-neutral-400 dark:text-neutral-500 px-1 mb-0.5">
+                        Krawędzie podstawowe
+                      </div>
+
+                      {[
+                        {
+                          id: 'bottom' as BorderActionType,
+                          label: 'Krawędź dolna',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 relative shrink-0">
+                              <div className="absolute bottom-0 left-0 right-0 h-[2px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'top' as BorderActionType,
+                          label: 'Krawędź górna',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 relative shrink-0">
+                              <div className="absolute top-0 left-0 right-0 h-[2px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'left' as BorderActionType,
+                          label: 'Krawędź lewa',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 relative shrink-0">
+                              <div className="absolute top-0 bottom-0 left-0 w-[2px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'right' as BorderActionType,
+                          label: 'Krawędź prawa',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 relative shrink-0">
+                              <div className="absolute top-0 bottom-0 right-0 w-[2px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'none' as BorderActionType,
+                          label: 'Brak krawędzi',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 flex items-center justify-center text-rose-500 font-bold text-[9px] shrink-0">
+                              ✕
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'all' as BorderActionType,
+                          label: 'Wszystkie krawędzie',
+                          preview: (
+                            <div className="w-4 h-4 grid grid-cols-2 grid-rows-2 border border-neutral-900 dark:border-white shrink-0">
+                              <div className="border-r border-b border-neutral-900 dark:border-white" />
+                              <div className="border-b border-neutral-900 dark:border-white" />
+                              <div className="border-r border-neutral-900 dark:border-white" />
+                              <div />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'outside' as BorderActionType,
+                          label: 'Krawędzie zewnętrzne',
+                          preview: (
+                            <div className="w-4 h-4 border border-neutral-900 dark:border-white shrink-0" />
+                          ),
+                        },
+                        {
+                          id: 'thick-outside' as BorderActionType,
+                          label: 'Gruba krawędź zewnętrzna',
+                          preview: (
+                            <div className="w-4 h-4 border-2 border-neutral-900 dark:border-white shrink-0" />
+                          ),
+                        },
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setLastBorderAction(item.id);
+                            if (onApplyBorder) {
+                              onApplyBorder(item.id, {
+                                lineStyle: selectedBorderLineStyle,
+                                lineWidth: selectedBorderLineWidth,
+                                lineColor: selectedBorderColor,
+                              });
+                            } else {
+                              onApplyStyle({ border: item.id });
+                            }
+                            setShowBorderMenu(false);
+                          }}
+                          className="flex items-center gap-2 px-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded text-left transition-colors cursor-pointer"
+                        >
+                          {item.preview}
+                          <span className="flex-1">{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Specialized Excel Borders */}
+                    <div className="flex flex-col gap-0.5 pt-1.5 border-t border-neutral-200 dark:border-neutral-700">
+                      <div className="text-[10px] uppercase font-semibold text-neutral-400 dark:text-neutral-500 px-1 mb-0.5">
+                        Krawędzie zaawansowane
+                      </div>
+
+                      {[
+                        {
+                          id: 'bottom-double' as BorderActionType,
+                          label: 'Podwójna dolna krawędź',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 relative shrink-0">
+                              <div className="absolute bottom-[2px] left-0 right-0 h-[1px] bg-neutral-900 dark:bg-white" />
+                              <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'bottom-thick' as BorderActionType,
+                          label: 'Gruba dolna krawędź',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 relative shrink-0">
+                              <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'top-bottom' as BorderActionType,
+                          label: 'Górna i dolna krawędź',
+                          preview: (
+                            <div className="w-4 h-4 border-t border-b border-neutral-900 dark:border-white relative shrink-0" />
+                          ),
+                        },
+                        {
+                          id: 'top-bottom-double' as BorderActionType,
+                          label: 'Górna i podwójna dolna krawędź',
+                          preview: (
+                            <div className="w-4 h-4 border-t border-neutral-900 dark:border-white relative shrink-0">
+                              <div className="absolute bottom-[2px] left-0 right-0 h-[1px] bg-neutral-900 dark:bg-white" />
+                              <div className="absolute bottom-0 left-0 right-0 h-[1px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'top-bottom-thick' as BorderActionType,
+                          label: 'Górna i gruba dolna krawędź',
+                          preview: (
+                            <div className="w-4 h-4 border-t border-neutral-900 dark:border-white relative shrink-0">
+                              <div className="absolute bottom-0 left-0 right-0 h-[3px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'inside-horizontal' as BorderActionType,
+                          label: 'Krawędzie wewnętrzne poziome',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 flex flex-col justify-center shrink-0">
+                              <div className="w-full h-[1.5px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                        {
+                          id: 'inside-vertical' as BorderActionType,
+                          label: 'Krawędzie wewnętrzne pionowe',
+                          preview: (
+                            <div className="w-4 h-4 border border-dashed border-neutral-300 dark:border-neutral-600 flex justify-center shrink-0">
+                              <div className="h-full w-[1.5px] bg-neutral-900 dark:bg-white" />
+                            </div>
+                          ),
+                        },
+                      ].map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            setLastBorderAction(item.id);
+                            if (onApplyBorder) {
+                              onApplyBorder(item.id, {
+                                lineStyle: selectedBorderLineStyle,
+                                lineWidth: selectedBorderLineWidth,
+                                lineColor: selectedBorderColor,
+                              });
+                            } else {
+                              onApplyStyle({ border: item.id });
+                            }
+                            setShowBorderMenu(false);
+                          }}
+                          className="flex items-center gap-2 px-2 py-1.5 hover:bg-neutral-100 dark:hover:bg-neutral-700 rounded text-left transition-colors cursor-pointer"
+                        >
+                          {item.preview}
+                          <span className="flex-1">{item.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Line Style Options */}
+                    <div className="flex flex-col gap-1 pt-1.5 border-t border-neutral-200 dark:border-neutral-700">
+                      <div className="text-[10px] uppercase font-semibold text-neutral-400 dark:text-neutral-500 px-1">
+                        Styl linii (grubość i deseń)
+                      </div>
+                      <div className="grid grid-cols-2 gap-1 px-1">
+                        {[
+                          { style: 'solid' as BorderLineStyle, width: 1, label: 'Cienka (1px)' },
+                          { style: 'solid' as BorderLineStyle, width: 2, label: 'Średnia (2px)' },
+                          { style: 'solid' as BorderLineStyle, width: 3, label: 'Gruba (3px)' },
+                          { style: 'dashed' as BorderLineStyle, width: 1, label: 'Kreskowana' },
+                          { style: 'dotted' as BorderLineStyle, width: 1, label: 'Kropkowana' },
+                          { style: 'double' as BorderLineStyle, width: 3, label: 'Podwójna' },
+                        ].map((ls) => {
+                          const isSelected =
+                            selectedBorderLineStyle === ls.style && selectedBorderLineWidth === ls.width;
+                          return (
+                            <button
+                              key={`${ls.style}-${ls.width}`}
+                              type="button"
+                              onClick={() => {
+                                setSelectedBorderLineStyle(ls.style);
+                                setSelectedBorderLineWidth(ls.width);
+                              }}
+                              className={`flex items-center justify-between px-2 py-1 rounded text-[11px] border cursor-pointer transition-all ${
+                                isSelected
+                                  ? 'bg-[#107c41]/15 border-[#107c41] text-[#107c41] dark:text-emerald-400 font-semibold'
+                                  : 'border-neutral-200 dark:border-neutral-700 hover:bg-neutral-100 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300'
+                              }`}
+                            >
+                              <span>{ls.label}</span>
+                              <div
+                                className="w-6 h-0 shrink-0 ml-1"
+                                style={{
+                                  borderBottomWidth: `${ls.width}px`,
+                                  borderBottomStyle: ls.style,
+                                  borderBottomColor: 'currentColor',
+                                }}
+                              />
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    {/* Line Color Picker */}
+                    <div className="flex flex-col gap-1 pt-1.5 border-t border-neutral-200 dark:border-neutral-700">
+                      <div className="flex items-center justify-between px-1">
+                        <span className="text-[10px] uppercase font-semibold text-neutral-400 dark:text-neutral-500">
+                          Kolor linii
+                        </span>
+                        <label className="flex items-center gap-1 text-[10px] text-neutral-500 hover:text-neutral-900 dark:hover:text-white cursor-pointer">
+                          <span>Własny</span>
+                          <input
+                            type="color"
+                            value={selectedBorderColor}
+                            onChange={(e) => setSelectedBorderColor(e.target.value)}
+                            className="w-4 h-4 rounded cursor-pointer border-0 p-0 bg-transparent"
+                          />
+                        </label>
+                      </div>
+
+                      <div className="grid grid-cols-8 gap-1 px-1">
+                        {[
+                          '#000000',
+                          '#4b5563',
+                          '#9ca3af',
+                          '#107c41',
+                          '#2563eb',
+                          '#dc2626',
+                          '#d97706',
+                          '#7c3aed',
+                        ].map((c) => (
+                          <button
+                            key={c}
+                            type="button"
+                            onClick={() => setSelectedBorderColor(c)}
+                            style={{ backgroundColor: c }}
+                            title={c}
+                            className={`w-6 h-6 rounded-xs border transition-transform cursor-pointer flex items-center justify-center ${
+                              selectedBorderColor.toLowerCase() === c.toLowerCase()
+                                ? 'scale-110 ring-2 ring-[#107c41] ring-offset-1 border-white'
+                                : 'border-neutral-300 dark:border-neutral-600 hover:scale-105'
+                            }`}
+                          >
+                            {selectedBorderColor.toLowerCase() === c.toLowerCase() && (
+                              <span className="text-[10px] text-white font-bold drop-shadow">✓</span>
+                            )}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>

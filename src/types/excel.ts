@@ -1,3 +1,35 @@
+export type BorderLineStyle = 'solid' | 'dashed' | 'dotted' | 'double';
+
+export interface BorderSide {
+  style?: BorderLineStyle;
+  width?: number; // width in pixels: 1, 2, 3
+  color?: string; // hex/rgb color
+}
+
+export interface CellBorders {
+  top?: BorderSide | null;
+  bottom?: BorderSide | null;
+  left?: BorderSide | null;
+  right?: BorderSide | null;
+}
+
+export type BorderActionType =
+  | 'bottom'
+  | 'top'
+  | 'left'
+  | 'right'
+  | 'none'
+  | 'all'
+  | 'outside'
+  | 'thick-outside'
+  | 'bottom-double'
+  | 'bottom-thick'
+  | 'top-bottom'
+  | 'top-bottom-double'
+  | 'top-bottom-thick'
+  | 'inside-horizontal'
+  | 'inside-vertical';
+
 export type CellStyle = {
   bold?: boolean;
   italic?: boolean;
@@ -8,7 +40,8 @@ export type CellStyle = {
   bgColor?: string;
   format?: 'general' | 'currency' | 'percent' | 'number' | 'date';
   decimals?: number;
-  border?: 'none' | 'all' | 'outside' | 'thick-bottom';
+  border?: 'none' | 'all' | 'outside' | 'thick-bottom' | string;
+  borders?: CellBorders;
 };
 
 export type CellData = {
@@ -40,7 +73,18 @@ export type LearningTask = {
   id: string;
   title: string;
   difficulty: TaskDifficulty;
-  category: 'Wprowadzanie & Styl' | 'Formuły Podstawowe' | 'Funkcje Logiczne' | 'Wyszukiwanie & Bazy' | 'Analiza Biznesowa';
+  category:
+    | 'Wprowadzanie & Styl'
+    | 'Formuły Podstawowe'
+    | 'Funkcje Logiczne'
+    | 'Wyszukiwanie & Bazy'
+    | 'Analiza Biznesowa'
+    | 'Wprowadzanie Danych'
+    | 'Formatowanie & Styl'
+    | 'Przeciąganie & Serie'
+    | 'Działania Arytmetyczne'
+    | 'Adresowanie Bezwzględne'
+    | 'Operacje na Tekstach';
   xpReward: number;
   description: string;
   instructions: string[];
